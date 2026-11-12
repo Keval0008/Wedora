@@ -1,0 +1,351 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Wedora design tokens — haldi-cream paper, kumkum red, marigold.
+   Light is the default; dark mirrors every token.
+--------------------------------------------------------------------------- */
+:root {
+  --paper: #fbf5ec;
+  --paper-raised: #fffdf9;
+  --paper-sunken: #f4eadb;
+  --ink: #2b1512;
+  --ink-soft: #5a3a33;
+  --ink-muted: #8a6c62;
+  --rule: #ecdcc8;
+  --rule-strong: #dcc4a8;
+
+  --signal: #a3172a;
+  --signal-soft: #f7e0dc;
+  --marigold: #c77c00;
+  --marigold-bright: #f2a516;
+  --marigold-soft: #fbedcb;
+  --leaf: #4c7a3a;
+  --done: #3f6f4a;
+  --done-soft: #e3eee4;
+  --urgent: #a41d1d;
+  --high: #c2410c;
+  --medium: #a07a16;
+  --low: #7c7268;
+
+  --shadow-sheet: 0 24px 60px -20px rgb(43 21 18 / 0.3);
+  --shadow-row: 0 1px 0 0 var(--rule);
+  --radius: 10px;
+}
+
+:root[data-theme="dark"] {
+  --paper: #170e0d;
+  --paper-raised: #221615;
+  --paper-sunken: #100908;
+  --ink: #f6ebdd;
+  --ink-soft: #dcc8b4;
+  --ink-muted: #a38c7c;
+  --rule: #34231f;
+  --rule-strong: #4a332c;
+
+  --signal: #f2776b;
+  --signal-soft: #3b1a18;
+  --marigold: #f3b23f;
+  --marigold-bright: #f6c35c;
+  --marigold-soft: #3a2a10;
+  --leaf: #8dbb73;
+  --done: #7fb98c;
+  --done-soft: #1c2a1f;
+  --urgent: #ec7070;
+  --high: #f0863c;
+  --medium: #d9bc5c;
+  --low: #a59a8e;
+
+  --shadow-sheet: 0 24px 60px -20px rgb(0 0 0 / 0.65);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #170e0d;
+    --paper-raised: #221615;
+    --paper-sunken: #100908;
+    --ink: #f6ebdd;
+    --ink-soft: #dcc8b4;
+    --ink-muted: #a38c7c;
+    --rule: #34231f;
+    --rule-strong: #4a332c;
+
+    --signal: #f2776b;
+    --signal-soft: #3b1a18;
+    --marigold: #f3b23f;
+    --marigold-bright: #f6c35c;
+    --marigold-soft: #3a2a10;
+    --leaf: #8dbb73;
+    --done: #7fb98c;
+    --done-soft: #1c2a1f;
+    --urgent: #ec7070;
+    --high: #f0863c;
+    --medium: #d9bc5c;
+    --low: #a59a8e;
+
+    --shadow-sheet: 0 24px 60px -20px rgb(0 0 0 / 0.65);
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-raised: var(--paper-raised);
+  --color-sunken: var(--paper-sunken);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-muted: var(--ink-muted);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-signal: var(--signal);
+  --color-signal-soft: var(--signal-soft);
+  --color-marigold: var(--marigold);
+  --color-marigold-bright: var(--marigold-bright);
+  --color-marigold-soft: var(--marigold-soft);
+  --color-leaf: var(--leaf);
+  --color-done: var(--done);
+  --color-done-soft: var(--done-soft);
+  --color-urgent: var(--urgent);
+  --color-high: var(--high);
+  --color-medium: var(--medium);
+  --color-low: var(--low);
+
+  --font-sans: var(--font-hind), "Noto Sans Gujarati", "Noto Sans Devanagari", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
+  --font-display: var(--font-cormorant), Georgia, "Times New Roman", serif;
+
+  --radius-card: 10px;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-hind), "Noto Sans Gujarati", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* Faint marigold grain: keeps large flat areas from feeling like dead pixels. */
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--marigold) 14%, transparent) 1px,
+    transparent 0
+  );
+  background-size: 24px 24px;
+}
+
+/* Respect the iOS home indicator / notch on the mobile bottom bar. */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+::selection {
+  background: var(--signal);
+  color: var(--paper);
+}
+
+/* Focus ring used across interactive elements. */
+.focus-ring:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+/* Thin scrollbars that match the paper theme. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Staggered entrance for task rows — one orchestrated reveal, not constant motion. */
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.row-in {
+  animation: row-in 260ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.sheet-in {
+  animation: sheet-in 200ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes strike {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Form controls. Browsers draw date pickers, spinners and option lists
+   themselves, so these are the bits Tailwind classes cannot reach.
+--------------------------------------------------------------------------- */
+
+/* The calendar / clock button inside date and time inputs. */
+.tb-field::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.55;
+  /* Recolour the browser's black glyph towards our ink, and flip it in dark mode. */
+  filter: grayscale(1) contrast(0.85);
+  transition: opacity 150ms ease;
+}
+
+.tb-field::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+:root:not([data-theme="light"]) .tb-field::-webkit-calendar-picker-indicator,
+:root[data-theme="dark"] .tb-field::-webkit-calendar-picker-indicator {
+  filter: invert(1) grayscale(1) contrast(0.85);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tb-field::-webkit-calendar-picker-indicator {
+    filter: invert(1) grayscale(1) contrast(0.85);
+  }
+}
+
+/* Date and time fields inherit the paper theme rather than the OS default. */
+.tb-field::-webkit-datetime-edit {
+  color: var(--ink);
+}
+
+.tb-field::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
+}
+
+.tb-field::-webkit-datetime-edit-text {
+  color: var(--ink-muted);
+  padding: 0 1px;
+}
+
+/* Number inputs: the default spinners are tiny and off-palette. */
+.tb-field[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.tb-field[type="number"]::-webkit-outer-spin-button,
+.tb-field[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* The option list is drawn by the OS; these two properties are all it honours. */
+.tb-field option {
+  background-color: var(--paper-raised);
+  color: var(--ink);
+}
+
+/* Checkboxes and radios pick up the accent instead of browser blue. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--signal);
+}
+
+/* Autofill in Chrome paints its own yellow; keep the paper ground. */
+.tb-field:-webkit-autofill,
+.tb-field:-webkit-autofill:hover,
+.tb-field:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--ink);
+  -webkit-box-shadow: 0 0 0 1000px var(--paper-raised) inset;
+  caret-color: var(--ink);
+}
+
+/* Popover entrance for the select, time and date panels. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pop-in {
+  animation: pop-in 140ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transform-origin: top center;
+}
+
+/* Horizontal chip rows scroll, but the bar itself is noise. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Toran: a strip of marigolds and mango leaves, drawn with gradients.
+--------------------------------------------------------------------------- */
+.toran {
+  height: 18px;
+  background:
+    radial-gradient(circle at 12px 7px, var(--marigold-bright) 0 5px, var(--marigold) 5.5px 6.5px, transparent 7px),
+    radial-gradient(ellipse 4px 7px at 24px 9px, var(--leaf) 0 100%, transparent 101%),
+    linear-gradient(var(--marigold) 0 0) top / 100% 2px no-repeat;
+  background-size: 32px 18px, 32px 18px, 100% 2px;
+  background-repeat: repeat-x, repeat-x, no-repeat;
+}
+
+/* Hairline flourish under display headings on public pages. */
+.flourish {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--marigold);
+}
+
+.flourish::before,
+.flourish::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: linear-gradient(90deg, transparent, currentColor, transparent);
+}
+
+@media print {
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
