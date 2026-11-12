@@ -145,6 +145,12 @@ const bad = await submit(baraat.submitSlug, { name: "Oops", entries: [{ link: "h
 check("a playlist link is refused with a reason", bad.body?.results?.[0]?.status === "error", JSON.stringify(bad.body));
 
 const songsNow = (await call(keval, `/api/song-lists/${baraat.id}/songs`, { teamId: T })).body?.songs ?? [];
+const listsNow = (await call(keval, "/api/song-lists", { teamId: T })).body?.lists ?? [];
+check(
+  "the Songs page counts each list's songs",
+  songsNow.length > 0 && listsNow.find((l) => l.id === baraat.id)?.songCount === songsNow.filter((s) => !s.hidden).length,
+  JSON.stringify(listsNow.map((l) => [l.title, l.songCount])),
+);
 const reversed = songsNow.map((s) => s.id).reverse();
 await call(keval, `/api/song-lists/${baraat.id}/order`, { method: "PUT", body: { ids: reversed }, teamId: T });
 const dj = await call(guest, `/api/public/dj/${baraat.djSlug}`);
@@ -223,6 +229,9 @@ check("the payment's to-do can't be deleted on its own", (await call(keval, `/ap
 
 const fn = (await post(keval, "/api/functions", { name: "Sangeet", date: "2026-12-02", startTime: "19:00", venue: "Party plot" }, T)).body?.function;
 check("a function is added", fn?.id);
+await post(keval, "/api/tasks", { title: "Book the dhol", functionId: fn.id }, T);
+const fnList = (await call(keval, "/api/functions", { teamId: T })).body?.functions ?? [];
+check("a function counts its open to-dos", fnList.find((f) => f.id === fn.id)?.openCount === 1, JSON.stringify(fnList.map((f) => [f.name, f.openCount])));
 await post(riya, `/api/functions/${fn.id}/items`, { time: "19:30", title: "Couple entry", ownerName: "Mama" }, T);
 const rs = (await call(keval, "/api/settings", { teamId: T })).body?.settings;
 check("the run-sheet is private until shared", (await call(guest, `/api/public/runsheet/${rs.runSheetSlug}`)).status === 404);

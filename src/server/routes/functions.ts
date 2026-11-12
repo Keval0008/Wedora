@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, count, eq, isNotNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { affectedRows, db, isDuplicateKey } from "../db";
 import { member, runItem, task, user, weddingFunction, weddingSettings } from "../db/schema";
@@ -69,7 +69,10 @@ const FunctionInput = z.object({
   archived: z.boolean().optional(),
 });
 
-/** GET /api/functions — in date order, each with its open task count. */
+/**
+ * GET /api/functions — in date order, each with its open task count. The
+ * counts are a separate grouped query (see the note on GET /api/song-lists).
+ */
 functionsRouter.get("/", async (c) => {
   const includeArchived = c.req.query("includeArchived") === "true";
   const teamId = c.get("team").id;
@@ -86,12 +89,6 @@ functionsRouter.get("/", async (c) => {
       notes: weddingFunction.notes,
       archived: weddingFunction.archived,
       sortOrder: weddingFunction.sortOrder,
-      openCount: sql<number>`(
-        select count(*) from ${task}
-        where ${task.functionId} = ${weddingFunction.id}
-          and ${task.status} <> 'done'
-          and ${task.isPersonal} = false
-      )`.mapWith(Number),
     })
     .from(weddingFunction)
     .where(
@@ -100,7 +97,15 @@ functionsRouter.get("/", async (c) => {
         : and(eq(weddingFunction.organizationId, teamId), eq(weddingFunction.archived, false)),
     )
     .orderBy(sql`${weddingFunction.date} is null`, asc(weddingFunction.date), asc(weddingFunction.startTime), asc(weddingFunction.name));
-  return c.json({ functions: rows });
+
+  const counts = await db
+    .select({ functionId: task.functionId, n: count() })
+    .from(task)
+    .where(and(eq(task.organizationId, teamId), ne(task.status, "done"), eq(task.isPersonal, false), isNotNull(task.functionId)))
+    .groupBy(task.functionId);
+  const open = new Map(counts.map((r) => [r.functionId, Number(r.n)]));
+
+  return c.json({ functions: rows.map((f) => ({ ...f, openCount: open.get(f.id) ?? 0 })) });
 });
 
 functionsRouter.post("/", async (c) => {

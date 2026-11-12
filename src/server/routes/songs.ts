@@ -28,26 +28,39 @@ async function loadList(teamId: string, id: string) {
   return row;
 }
 
-/** GET /api/song-lists — each list with its song count. */
+/**
+ * GET /api/song-lists — each list with its song count.
+ *
+ * The counts come from a separate grouped query. A correlated subquery in the
+ * select list doesn't work here: on a single-table select Drizzle leaves column
+ * names unqualified, so `list_id = id` would compare a song with itself.
+ */
 songListsRouter.get("/", async (c) => {
-  const rows = await db
-    .select({
-      id: songList.id,
-      kind: songList.kind,
-      title: songList.title,
-      description: songList.description,
-      submitSlug: songList.submitSlug,
-      djSlug: songList.djSlug,
-      isOpen: songList.isOpen,
-      showListToGuests: songList.showListToGuests,
-      createdAt: songList.createdAt,
-      songCount: sql<number>`(select count(*) from ${song} where ${song.listId} = ${songList.id} and ${song.hidden} = false)`.mapWith(Number),
-      dupCount: sql<number>`(select count(*) from ${song} where ${song.listId} = ${songList.id} and ${song.possibleDupOf} is not null)`.mapWith(Number),
-    })
+  const lists = await db
+    .select()
     .from(songList)
     .where(eq(songList.organizationId, c.get("team").id))
     .orderBy(asc(songList.createdAt));
-  return c.json({ lists: rows });
+  if (!lists.length) return c.json({ lists: [] });
+
+  const counts = await db
+    .select({
+      listId: song.listId,
+      songCount: sql<number>`sum(case when ${song.hidden} = false then 1 else 0 end)`.mapWith(Number),
+      dupCount: sql<number>`sum(case when ${song.possibleDupOf} is not null then 1 else 0 end)`.mapWith(Number),
+    })
+    .from(song)
+    .where(inArray(song.listId, lists.map((l) => l.id)))
+    .groupBy(song.listId);
+  const byList = new Map(counts.map((r) => [r.listId, r]));
+
+  return c.json({
+    lists: lists.map((l) => ({
+      ...l,
+      songCount: byList.get(l.id)?.songCount ?? 0,
+      dupCount: byList.get(l.id)?.dupCount ?? 0,
+    })),
+  });
 });
 
 songListsRouter.post("/", async (c) => {
