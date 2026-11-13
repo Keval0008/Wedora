@@ -34,6 +34,8 @@ describe("normalizeTitle", () => {
     expect(normalizeTitle("Tum Hi Ho - Unplugged")).toBe("tum hi ho unplugged");
     expect(normalizeTitle("Kesariya (Lo-Fi)")).toBe("kesariya lofi");
     expect(normalizeTitle("Kala Chashma (Remix)")).not.toBe(normalizeTitle("Kala Chashma"));
+    expect(normalizeTitle('Kesariya (Dance Mix) [From "Brahmastra"]')).toBe("kesariya mix");
+    expect(normalizeTitle("Kala Chashma - Trending Version")).not.toBe(normalizeTitle("Kala Chashma"));
   });
 
   it("ignores accents and apostrophes", () => {

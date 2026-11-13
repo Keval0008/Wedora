@@ -5,6 +5,7 @@ import { organization, runItem, user, weddingFunction, weddingSettings } from ".
 import { router } from "../hono";
 import { HttpError, notFound, parse, readJson, tooMany } from "../lib/http";
 import { lookupSong, MetaError } from "../lib/songs/metadata";
+import { searchSongs } from "../lib/songs/search";
 import { songsWithVotes } from "./songs";
 import { runItemColumns, runItemOrder } from "./functions";
 import {
@@ -13,6 +14,7 @@ import {
   loadListBySlug,
   MAX_LINKS_PER_SUBMIT,
   recentSubmissionCount,
+  SongEntrySchema,
   submitMany,
   SUBMISSIONS_PER_WINDOW,
 } from "../services/songs";
@@ -59,7 +61,7 @@ publicRouter.get("/lists/:slug", async (c) => {
   return c.json(view);
 });
 
-/* A small per-instance brake on the link preview, which calls out to Spotify and YouTube. */
+/* A small per-instance brake on preview and search, which call out to Spotify, YouTube and iTunes. */
 const previewHits = new Map<string, { n: number; resetAt: number }>();
 function allowPreview(key: string): boolean {
   const now = Date.now();
@@ -70,7 +72,7 @@ function allowPreview(key: string): boolean {
     return true;
   }
   hit.n++;
-  return hit.n <= 40;
+  return hit.n <= 60;
 }
 
 /** GET /api/public/lists/:slug/preview?url= — album art and title while the guest types. */
@@ -88,23 +90,22 @@ publicRouter.get("/lists/:slug/preview", async (c) => {
   }
 });
 
+/** GET /api/public/lists/:slug/search?q= — songs matching a typed name, for the guest to pick. */
+publicRouter.get("/lists/:slug/search", async (c) => {
+  const list = await loadListBySlug("submitSlug", c.req.param("slug"));
+  if (!list) throw notFound("This song list doesn't exist.");
+  if (!allowPreview(hashIp(clientIp(c.req.raw.headers)))) throw tooMany();
+  const q = (c.req.query("q") ?? "").slice(0, 100);
+  return c.json(await searchSongs(q));
+});
+
 const SubmitInput = z.object({
   name: z.string().trim().min(1, "Tell us your name").max(80),
   /** Honeypot: people never see this field, bots fill it in. */
   website: z.string().max(200).optional(),
   note: z.string().trim().max(500).optional(),
   entries: z
-    .array(
-      z.object({
-        link: z.string().trim().max(600).nullable().optional(),
-        title: z.string().trim().max(300).nullable().optional(),
-        artist: z.string().trim().max(300).nullable().optional(),
-        performer: z.string().trim().max(120).nullable().optional(),
-        cutStartSec: z.number().int().min(0).max(3600).nullable().optional(),
-        cutEndSec: z.number().int().min(0).max(3600).nullable().optional(),
-        notes: z.string().trim().max(2000).nullable().optional(),
-      }),
-    )
+    .array(SongEntrySchema)
     .min(1, "Add at least one song")
     .max(MAX_LINKS_PER_SUBMIT, `Up to ${MAX_LINKS_PER_SUBMIT} songs at a time`),
 });

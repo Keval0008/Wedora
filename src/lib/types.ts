@@ -171,6 +171,16 @@ export type SongMeta = {
   durationSec: number | null;
 };
 
+export type SearchResult = {
+  source: "spotify" | "itunes";
+  title: string;
+  artist: string | null;
+  album: string | null;
+  thumbnailUrl: string | null;
+  durationSec: number | null;
+  link: string | null;
+};
+
 export type PublicList = {
   title: string;
   description: string | null;

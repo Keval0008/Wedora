@@ -13,7 +13,7 @@ import {
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CircleAlert, Eye, EyeOff, GitMerge, GripVertical, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { ArrowLeft, CircleAlert, Eye, EyeOff, GitMerge, GripVertical, Pencil, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { useConfirm } from "@/components/confirm";
 import { ShareButtons } from "@/components/songs/share-panel";
 import { PlatformLinks, SongThumb } from "@/components/songs/song-bits";
+import { looseKey, pickToEntry, SongPicker, type SongPick } from "@/components/songs/song-picker";
 import { useTeam } from "@/components/team-context";
 import { Button, EmptyState, Input, Label, Sheet, Textarea } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -49,7 +50,6 @@ export default function SongListPage() {
   useEffect(() => setOrder(data?.songs ?? []), [data?.songs]);
   const [editing, setEditing] = useState<Song | null>(null);
   const [adding, setAdding] = useState("");
-  const [busy, setBusy] = useState(false);
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: key });
@@ -80,26 +80,14 @@ export default function SongListPage() {
     });
   };
 
-  const addSongs = async () => {
-    const lines = adding.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-    if (!lines.length) return;
-    setBusy(true);
+  const addPick = async (pick: SongPick) => {
     try {
-      const results = await api.addSongs(
-        teamId!,
-        list.id,
-        lines.map((l) => (/https?:\/\/|spotify:/i.test(l) ? { link: l } : { title: l })),
-      );
-      const failed = results.filter((r) => r.status === "error" || r.status === "taken");
-      for (const r of failed) toast.error(`${r.input}: ${r.message}`);
-      const ok = results.length - failed.length;
-      if (ok) toast.success(`Added ${ok}`);
-      setAdding(failed.map((r) => r.input).join("\n"));
+      const [r] = await api.addSongs(teamId!, list.id, [pickToEntry(pick)]);
+      if (r && (r.status === "added" || r.status === "voted")) toast.success(`${r.title ?? pick.title}: ${r.message}`);
+      else toast.error(`${pick.title}: ${r?.message ?? "Could not add"}`);
       refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not add");
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -169,19 +157,15 @@ export default function SongListPage() {
       )}
 
       <section className="mt-6">
-        <Label htmlFor="add-songs">Add songs yourself</Label>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Textarea
-            id="add-songs"
-            value={adding}
-            onChange={(e) => setAdding(e.target.value)}
-            placeholder="Paste links or type song names, one per line"
-            className="min-h-16 flex-1 font-mono text-[13px]"
-          />
-          <Button onClick={() => void addSongs()} disabled={busy || !adding.trim()} className="sm:self-start">
-            <Plus className="size-4" /> Add
-          </Button>
-        </div>
+        <Label>Add songs yourself</Label>
+        <SongPicker
+          slug={list.submitSlug}
+          query={adding}
+          onQueryChange={setAdding}
+          onPick={(p) => void addPick(p)}
+          takenKeys={new Map(order.map((s) => [looseKey(s.title, s.artist), isSangeet ? s.performer : null]))}
+          takenLabel="taken by"
+        />
       </section>
 
       {order.length === 0 ? (
@@ -262,8 +246,7 @@ function SortableSong({
             .join(" · ")}
         </p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
-          <PlatformLinks spotifyId={song.spotifyId} youtubeId={song.youtubeId} />
-          {!song.spotifyId && !song.youtubeId && <span className="font-mono text-[11px] text-marigold">no link yet</span>}
+          <PlatformLinks spotifyId={song.spotifyId} youtubeId={song.youtubeId} title={song.title} artist={song.artist} />
           <span className="text-[11px] text-ink-muted" title={song.submitters.join(", ")}>
             {song.votes > 1 ? `×${song.votes} · ` : ""}
             {song.submitters.slice(0, 3).join(", ")}

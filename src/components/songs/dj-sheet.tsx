@@ -126,7 +126,7 @@ export function DjSheet({ view }: { view: DjView }) {
                   )}
                   {s.notes && <p className="mt-1 text-[13px] text-ink-soft">“{s.notes}”</p>}
                   <div className="mt-1">
-                    <PlatformLinks spotifyId={s.spotifyId} youtubeId={s.youtubeId} />
+                    <PlatformLinks spotifyId={s.spotifyId} youtubeId={s.youtubeId} title={s.title} artist={s.artist} />
                   </div>
                 </div>
               </li>

@@ -1,12 +1,13 @@
 "use client";
 
 import { Check, CircleAlert, Loader2, Music, Plus, Search, Trash2, Users } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SongThumb } from "@/components/songs/song-bits";
+import { findLinks, looseKey, PickedSong, pickToEntry, SongPicker, typedPick, type SongPick } from "@/components/songs/song-picker";
 import { Button, Input, Label, Textarea } from "@/components/ui";
 import { ApiError, publicApi, type SongEntry } from "@/lib/api";
 import { cn, parseMmss } from "@/lib/format";
-import type { PublicList, SongMeta, SubmitResult } from "@/lib/types";
+import type { PublicList, SubmitResult } from "@/lib/types";
 
 const NAME_KEY = "wedora.guestName";
 
@@ -26,82 +27,56 @@ function saveName(name: string) {
   }
 }
 
-type Preview = { state: "loading" } | { state: "ok"; meta: SongMeta } | { state: "error"; message: string };
-
-/** Looks up album art and title for each pasted line, a moment after typing stops. */
-function useLinkPreviews(slug: string, lines: string[]) {
-  const [previews, setPreviews] = useState<Record<string, Preview>>({});
-  const asked = useRef(new Set<string>());
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      for (const line of lines) {
-        if (!line || asked.current.has(line)) continue;
-        asked.current.add(line);
-        setPreviews((p) => ({ ...p, [line]: { state: "loading" } }));
-        publicApi
-          .preview(slug, line)
-          .then((r) => setPreviews((p) => ({ ...p, [line]: r.ok ? { state: "ok", meta: r.meta } : { state: "error", message: r.message } })))
-          .catch((e: Error) => {
-            asked.current.delete(line);
-            setPreviews((p) => ({ ...p, [line]: { state: "error", message: e.message } }));
-          });
-      }
-    }, 450);
-    return () => clearTimeout(timer);
-  }, [slug, lines]);
-
-  return previews;
+/** A typed-but-not-added name still counts when the guest presses Send. */
+function pendingPick(query: string): SongPick | null {
+  const text = query.trim();
+  if (text.length < 2 || findLinks(text).length) return null;
+  return typedPick(text);
 }
 
-type TypedSong = { title: string; artist: string };
-type Performance = { link: string; title: string; artist: string; cutStart: string; cutEnd: string; notes: string };
-const emptyPerformance = (): Performance => ({ link: "", title: "", artist: "", cutStart: "", cutEnd: "", notes: "" });
+type Performance = { pick: SongPick | null; query: string; cutStart: string; cutEnd: string; notes: string };
+const emptyPerformance = (): Performance => ({ pick: null, query: "", cutStart: "", cutEnd: "", notes: "" });
 
 export function PublicSongForm({ slug, initial }: { slug: string; initial: PublicList }) {
   const [view, setView] = useState(initial);
   const [name, setName] = useState("");
-  const [links, setLinks] = useState("");
-  const [typed, setTyped] = useState<TypedSong[]>([]);
-  const [performer, setPerformer] = useState("");
-  const [performances, setPerformances] = useState<Performance[]>([emptyPerformance()]);
   const [honeypot, setHoneypot] = useState("");
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<SubmitResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
 
+  // baraat / other
+  const [query, setQuery] = useState("");
+  const [picks, setPicks] = useState<SongPick[]>([]);
+  // sangeet
+  const [performer, setPerformer] = useState("");
+  const [performances, setPerformances] = useState<Performance[]>([emptyPerformance()]);
+
   useEffect(() => setName(readName()), []);
 
   const isSangeet = view.kind === "sangeet";
-  const lines = useMemo(
-    () =>
-      isSangeet
-        ? performances.map((p) => p.link.trim()).filter(Boolean)
-        : links
-            .split(/\n+/)
-            .map((l) => l.trim())
-            .filter(Boolean),
-    [links, performances, isSangeet],
-  );
-  const previews = useLinkPreviews(slug, lines);
+
+  /** Songs already on the list, so search results can say so. */
+  const taken = useMemo(() => new Map(view.songs.map((s) => [looseKey(s.title, s.artist), isSangeet ? s.performer : null])), [view.songs, isSangeet]);
+
+  const addPick = (p: SongPick) => setPicks((list) => (list.some((x) => x.key === p.key) ? list : [...list, p]));
 
   const entries: SongEntry[] = isSangeet
-    ? performances
-        .filter((p) => p.link.trim() || p.title.trim())
-        .map((p) => ({
-          link: p.link.trim() || null,
-          title: p.link.trim() ? null : p.title.trim(),
-          artist: p.link.trim() ? null : p.artist.trim() || null,
-          performer: performer.trim() || null,
-          cutStartSec: parseMmss(p.cutStart) ?? null,
-          cutEndSec: parseMmss(p.cutEnd) ?? null,
-          notes: p.notes.trim() || null,
-        }))
-    : [
-        ...lines.map((link) => ({ link })),
-        ...typed.filter((t) => t.title.trim()).map((t) => ({ title: t.title.trim(), artist: t.artist.trim() || null })),
-      ];
+    ? performances.flatMap((p) => {
+        const chosen = p.pick ?? pendingPick(p.query);
+        if (!chosen) return [];
+        return [
+          {
+            ...pickToEntry(chosen),
+            performer: performer.trim() || null,
+            cutStartSec: parseMmss(p.cutStart) ?? null,
+            cutEndSec: parseMmss(p.cutEnd) ?? null,
+            notes: p.notes.trim() || null,
+          },
+        ];
+      })
+    : [...picks, ...(pendingPick(query) && !picks.some((p) => p.key === pendingPick(query)!.key) ? [pendingPick(query)!] : [])].map(pickToEntry);
 
   const badCut = isSangeet && performances.some((p) => parseMmss(p.cutStart) === undefined || parseMmss(p.cutEnd) === undefined);
   const canSubmit = name.trim() && entries.length > 0 && !busy && !badCut && (!isSangeet || performer.trim());
@@ -115,14 +90,21 @@ export function PublicSongForm({ slug, initial }: { slug: string; initial: Publi
     try {
       const { results } = await publicApi.submit(slug, { name: name.trim(), website: honeypot, entries });
       setResults(results);
-      // Keep only what didn't go through, so they can fix it.
-      const failed = new Set(results.filter((r) => r.status === "error" || r.status === "taken").map((r) => r.input));
+      const ok = (r: SubmitResult) => r.status === "added" || r.status === "voted";
       if (isSangeet) {
-        const left = performances.filter((p) => failed.has((p.link || p.title).trim()));
-        setPerformances(left.length ? left : [emptyPerformance()]);
+        // Keep the songs that didn't go through, so they can pick another.
+        // Results line up with the songs that were sent; empty blocks sent nothing.
+        let next = 0;
+        const left = performances.filter((p) => {
+          if (!p.pick && !pendingPick(p.query)) return false;
+          const r = results[next++];
+          return !r || !ok(r);
+        });
+        setPerformances(left.length ? left.map((p) => ({ ...p, pick: null, query: "" })) : [emptyPerformance()]);
+        if (results.every(ok)) setPerformer("");
       } else {
-        setLinks(lines.filter((l) => failed.has(l)).join("\n"));
-        setTyped(typed.filter((t) => failed.has(t.title.trim())));
+        setPicks((list) => list.filter((_, i) => !ok(results[i] ?? { status: "error", input: "", message: "" })));
+        setQuery("");
       }
       setView(await publicApi.list(slug));
     } catch (err) {
@@ -137,14 +119,20 @@ export function PublicSongForm({ slug, initial }: { slug: string; initial: Publi
     return !q || `${s.title} ${s.artist ?? ""} ${s.performer ?? ""}`.toLowerCase().includes(q);
   });
 
+  const sendLabel = isSangeet
+    ? "Add our performance"
+    : entries.length > 1
+      ? `Send ${entries.length} songs`
+      : entries.length === 1
+        ? "Send song"
+        : "Pick a song first";
+
   return (
     <div className="min-h-dvh">
       <div className="toran" aria-hidden />
       <div className="mx-auto w-full max-w-xl px-4 pb-16 pt-8">
         <header className="text-center">
-          {view.coupleNames && (
-            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-marigold">{view.coupleNames}</p>
-          )}
+          {view.coupleNames && <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-marigold">{view.coupleNames}</p>}
           <h1 className="mt-2 font-display text-5xl font-semibold leading-[1.02] tracking-tight text-ink">
             {isSangeet ? (
               <>
@@ -164,8 +152,8 @@ export function PublicSongForm({ slug, initial }: { slug: string; initial: Publi
           <p className="mx-auto mt-3 max-w-md text-[15px] text-ink-soft">
             {view.description ||
               (isSangeet
-                ? "Performing? Tell us your song and the part you'll dance to. One list goes to the DJ, and no two acts get the same song."
-                : "Which songs should get everyone dancing in the baraat? Paste Spotify or YouTube Music links. Duplicates are merged automatically.")}
+                ? "Performing? Find your song and tell us the part you'll dance to. One list goes to the DJ, and no two acts get the same song."
+                : "Which songs should get everyone dancing in the baraat? Search by name or paste a Spotify / YouTube Music link. Duplicates are merged automatically.")}
           </p>
         </header>
 
@@ -204,27 +192,28 @@ export function PublicSongForm({ slug, initial }: { slug: string; initial: Publi
                   />
                 </div>
                 {performances.map((p, i) => {
-                  const preview = p.link.trim() ? previews[p.link.trim()] : undefined;
-                  const set = (patch: Partial<Performance>) => setPerformances(performances.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+                  const set = (patch: Partial<Performance>) => setPerformances((list) => list.map((x, j) => (j === i ? { ...x, ...patch } : x)));
                   return (
                     <div key={i} className="space-y-3 rounded-[10px] border border-rule bg-paper/60 p-3">
                       <div className="flex items-center justify-between">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-muted">
-                          Song {performances.length > 1 ? i + 1 : ""}
-                        </p>
+                        <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-muted">Song {performances.length > 1 ? i + 1 : ""}</p>
                         {performances.length > 1 && (
                           <button type="button" className="text-ink-muted hover:text-urgent" aria-label="Remove song" onClick={() => setPerformances(performances.filter((_, j) => j !== i))}>
                             <Trash2 className="size-4" />
                           </button>
                         )}
                       </div>
-                      <Input value={p.link} onChange={(e) => set({ link: e.target.value })} placeholder="Spotify or YouTube link" inputMode="url" />
-                      {preview && <PreviewLine preview={preview} />}
-                      {!p.link.trim() && (
-                        <div className="grid grid-cols-2 gap-2">
-                          <Input value={p.title} onChange={(e) => set({ title: e.target.value })} placeholder="…or song name" />
-                          <Input value={p.artist} onChange={(e) => set({ artist: e.target.value })} placeholder="Singer / film" />
-                        </div>
+                      {p.pick ? (
+                        <PickedSong pick={p.pick} onRemove={() => set({ pick: null })} removeLabel="Change" />
+                      ) : (
+                        <SongPicker
+                          slug={slug}
+                          query={p.query}
+                          onQueryChange={(q) => set({ query: q })}
+                          onPick={(pick) => set({ pick, query: "" })}
+                          takenKeys={taken}
+                          takenLabel="taken by"
+                        />
                       )}
                       <div className="grid grid-cols-2 gap-2">
                         <div>
@@ -265,38 +254,24 @@ export function PublicSongForm({ slug, initial }: { slug: string; initial: Publi
                 )}
               </>
             ) : (
-              <>
+              <div className="space-y-3">
                 <div>
-                  <Label htmlFor="links">Song links</Label>
-                  <Textarea
-                    id="links"
-                    value={links}
-                    onChange={(e) => setLinks(e.target.value)}
-                    placeholder={"Paste one link per line\nhttps://open.spotify.com/track/…\nhttps://music.youtube.com/watch?v=…"}
-                    className="min-h-28 font-mono text-[13px]"
-                  />
-                  {lines.length > 0 && (
-                    <ul className="mt-2 space-y-1.5">
-                      {lines.map((l) => (
-                        <li key={l}>{previews[l] ? <PreviewLine preview={previews[l]} /> : <PreviewLine preview={{ state: "loading" }} />}</li>
+                  <Label>Find a song</Label>
+                  <SongPicker slug={slug} query={query} onQueryChange={setQuery} onPick={addPick} takenKeys={taken} />
+                </div>
+                {picks.length > 0 && (
+                  <div>
+                    <Label>Your songs · {picks.length}</Label>
+                    <ul className="space-y-1.5">
+                      {picks.map((p) => (
+                        <li key={p.key}>
+                          <PickedSong pick={p} onRemove={() => setPicks((list) => list.filter((x) => x.key !== p.key))} />
+                        </li>
                       ))}
                     </ul>
-                  )}
-                </div>
-
-                {typed.map((t, i) => (
-                  <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2">
-                    <Input value={t.title} onChange={(e) => setTyped(typed.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))} placeholder="Song name" />
-                    <Input value={t.artist} onChange={(e) => setTyped(typed.map((x, j) => (j === i ? { ...x, artist: e.target.value } : x)))} placeholder="Singer / film" />
-                    <Button type="button" size="sm" variant="ghost" aria-label="Remove" onClick={() => setTyped(typed.filter((_, j) => j !== i))}>
-                      <Trash2 className="size-4" />
-                    </Button>
                   </div>
-                ))}
-                <button type="button" className="text-[13px] font-medium text-signal hover:underline" onClick={() => setTyped([...typed, { title: "", artist: "" }])}>
-                  No link? Type a song name instead
-                </button>
-              </>
+                )}
+              </div>
             )}
 
             {error && (
@@ -307,7 +282,7 @@ export function PublicSongForm({ slug, initial }: { slug: string; initial: Publi
 
             <Button type="submit" variant="signal" className="h-12 w-full text-[15px]" disabled={!canSubmit}>
               {busy ? <Loader2 className="size-4 animate-spin" /> : <Music className="size-4" />}
-              {busy ? "Sending…" : isSangeet ? "Add our performance" : `Add ${entries.length > 1 ? `${entries.length} songs` : "song"}`}
+              {busy ? "Sending…" : sendLabel}
             </Button>
           </form>
         )}
@@ -335,12 +310,10 @@ export function PublicSongForm({ slug, initial }: { slug: string; initial: Publi
 
         {view.showListToGuests && view.songs.length > 0 && (
           <section className="mt-10">
-            <div className="flex items-end justify-between gap-3">
-              <h2 className="font-display text-3xl font-semibold text-ink">
-                {isSangeet ? "Performances so far" : "On the list"}
-                <span className="ml-2 font-mono text-[13px] text-ink-muted">{view.songs.length}</span>
-              </h2>
-            </div>
+            <h2 className="font-display text-3xl font-semibold text-ink">
+              {isSangeet ? "Performances so far" : "On the list"}
+              <span className="ml-2 font-mono text-[13px] text-ink-muted">{view.songs.length}</span>
+            </h2>
             {view.songs.length > 6 && (
               <div className="relative mt-3">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-muted" />
@@ -376,36 +349,6 @@ export function PublicSongForm({ slug, initial }: { slug: string; initial: Publi
           Made with Wed<span className="italic text-signal">ora</span>
         </p>
       </div>
-    </div>
-  );
-}
-
-function PreviewLine({ preview }: { preview: Preview }) {
-  if (preview.state === "loading") {
-    return (
-      <p className="flex items-center gap-2 text-[12px] text-ink-muted">
-        <Loader2 className="size-3.5 animate-spin" /> Looking up…
-      </p>
-    );
-  }
-  if (preview.state === "error") {
-    return (
-      <p className="flex items-start gap-2 text-[12px] text-urgent">
-        <CircleAlert className="mt-px size-3.5 shrink-0" /> {preview.message}
-      </p>
-    );
-  }
-  const m = preview.meta;
-  return (
-    <div className="flex items-center gap-2.5 rounded-[8px] border border-rule bg-paper/70 px-2 py-1.5">
-      <SongThumb url={m.thumbnailUrl} size={32} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium text-ink">{m.title}</p>
-        <p className="truncate text-[11px] text-ink-muted">
-          {m.artist ?? ""} · {m.platform === "spotify" ? "Spotify" : "YouTube"}
-        </p>
-      </div>
-      <Check className="size-4 shrink-0 text-done" />
     </div>
   );
 }

@@ -7,7 +7,7 @@ import { badRequest, conflict, notFound, parse, readJson } from "../lib/http";
 import { newId, newSlug } from "../lib/ids";
 import { normalizeTitle } from "../lib/songs/dedupe";
 import { lookupSong, MetaError } from "../lib/songs/metadata";
-import { submitMany } from "../services/songs";
+import { SongEntrySchema, submitMany } from "../services/songs";
 
 export const songListsRouter = router();
 songListsRouter.use(requireAuth, requireTeam);
@@ -154,17 +154,7 @@ songListsRouter.post("/:id/songs", async (c) => {
   const input = parse(
     z.object({
       entries: z
-        .array(
-          z.object({
-            link: z.string().max(600).nullable().optional(),
-            title: z.string().max(300).nullable().optional(),
-            artist: z.string().max(300).nullable().optional(),
-            performer: z.string().max(120).nullable().optional(),
-            cutStartSec: z.number().int().min(0).max(3600).nullable().optional(),
-            cutEndSec: z.number().int().min(0).max(3600).nullable().optional(),
-            notes: z.string().max(2000).nullable().optional(),
-          }),
-        )
+        .array(SongEntrySchema)
         .min(1)
         .max(10),
     }),

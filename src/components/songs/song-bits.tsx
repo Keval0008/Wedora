@@ -1,11 +1,13 @@
 "use client";
 
 import { Music2 } from "lucide-react";
+import { useState } from "react";
 import { cn } from "@/lib/format";
 
-/** Album art, or a note glyph when a typed-in song has none. */
+/** Album art, or a note glyph when a typed-in song has none (or its image won't load). */
 export function SongThumb({ url, size = 44, className }: { url: string | null | undefined; size?: number; className?: string }) {
-  if (url) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (url && failedUrl !== url) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- covers come from Spotify and YouTube CDNs
       <img
@@ -14,6 +16,7 @@ export function SongThumb({ url, size = 44, className }: { url: string | null | 
         width={size}
         height={size}
         loading="lazy"
+        onError={() => setFailedUrl(url)}
         className={cn("shrink-0 rounded-[6px] bg-sunken object-cover", className)}
         style={{ width: size, height: size }}
       />
@@ -37,10 +40,38 @@ export function youtubeMusicUrl(id: string) {
   return `https://music.youtube.com/watch?v=${id}`;
 }
 
-/** Small "Spotify" / "YouTube" links next to a song. */
-export function PlatformLinks({ spotifyId, youtubeId }: { spotifyId: string | null; youtubeId: string | null }) {
+/**
+ * Small "Spotify" / "YouTube" links next to a song. A song added by name has
+ * neither, so it gets search links instead — one tap for the DJ to find it.
+ */
+export function PlatformLinks({
+  spotifyId,
+  youtubeId,
+  title,
+  artist,
+}: {
+  spotifyId: string | null;
+  youtubeId: string | null;
+  title?: string;
+  artist?: string | null;
+}) {
+  if (!spotifyId && !youtubeId && title) {
+    const q = encodeURIComponent([title, artist?.split(/,|&/)[0]].filter(Boolean).join(" "));
+    return (
+      <span className="inline-flex items-center gap-2 font-mono text-[11px] text-ink-muted">
+        find on
+        <a href={`https://music.youtube.com/search?q=${q}`} target="_blank" rel="noreferrer" className="text-[#d32020] hover:underline">
+          YouTube Music
+        </a>
+        <a href={`https://open.spotify.com/search/${q}`} target="_blank" rel="noreferrer" className="text-[#1d9a4d] hover:underline">
+          Spotify
+        </a>
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-2 font-mono text-[11px]">
+
       {spotifyId && (
         <a href={spotifyUrl(spotifyId)} target="_blank" rel="noreferrer" className="text-[#1d9a4d] hover:underline">
           Spotify

@@ -12,6 +12,7 @@ import type {
   PublicList,
   ReminderPreset,
   RunItem,
+  SearchResult,
   Song,
   SongList,
   SongListKind,
@@ -113,6 +114,8 @@ export type SongEntry = {
   link?: string | null;
   title?: string | null;
   artist?: string | null;
+  thumbnailUrl?: string | null;
+  durationSec?: number | null;
   performer?: string | null;
   cutStartSec?: number | null;
   cutEndSec?: number | null;
@@ -292,6 +295,10 @@ export const publicApi = {
   preview: (slug: string, url: string) =>
     request<{ ok: true; meta: SongMeta } | { ok: false; message: string }>(
       `/api/public/lists/${slug}/preview?url=${encodeURIComponent(url)}`,
+    ),
+  search: (slug: string, q: string) =>
+    request<{ results: SearchResult[]; source: "spotify" | "itunes" | null }>(
+      `/api/public/lists/${slug}/search?q=${encodeURIComponent(q)}`,
     ),
   submit: (slug: string, body: { name: string; note?: string; website?: string; entries: SongEntry[] }) =>
     request<{ results: SubmitResult[] }>(`/api/public/lists/${slug}/submit`, { method: "POST", body: json(body) }),

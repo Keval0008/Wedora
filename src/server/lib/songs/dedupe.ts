@@ -8,6 +8,8 @@
 /** Words that make a different recording, so they survive normalization. */
 const VERSION_WORDS = [
   "remix",
+  "mix",
+  "version",
   "mashup",
   "unplugged",
   "reprise",

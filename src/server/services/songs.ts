@@ -1,12 +1,14 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { and, count, eq, gte, sql } from "drizzle-orm";
+import { z } from "zod";
 import { db, isDuplicateKey } from "../db";
 import { song, songList, songSubmission, type Song, type SongList } from "../db/schema";
 import { getEnv } from "../env";
 import { newId } from "../lib/ids";
 import { findMatch, normalizeTitle } from "../lib/songs/dedupe";
 import { lookupSong, MetaError, type SongMeta } from "../lib/songs/metadata";
+import { isAllowedThumbnail } from "../lib/songs/search";
 
 export const SUBMISSIONS_PER_WINDOW = 20;
 export const WINDOW_MS = 10 * 60_000;
@@ -33,11 +35,27 @@ export async function recentSubmissionCount(ipHash: string, now = new Date()): P
   return Number(row?.n ?? 0);
 }
 
+/** One song as the guest form and the owner's add box send it. */
+export const SongEntrySchema = z.object({
+  link: z.string().trim().max(600).nullable().optional(),
+  title: z.string().trim().max(300).nullable().optional(),
+  artist: z.string().trim().max(300).nullable().optional(),
+  thumbnailUrl: z.string().max(600).nullable().optional(),
+  durationSec: z.number().int().min(0).max(36_000).nullable().optional(),
+  performer: z.string().trim().max(120).nullable().optional(),
+  cutStartSec: z.number().int().min(0).max(3600).nullable().optional(),
+  cutEndSec: z.number().int().min(0).max(3600).nullable().optional(),
+  notes: z.string().trim().max(2000).nullable().optional(),
+});
+
 export type SubmitEntry = {
   /** A pasted link, or empty when the guest typed a title instead. */
   link?: string | null;
   title?: string | null;
   artist?: string | null;
+  /** From a search pick (iTunes/Spotify cover art); checked against an allow-list. */
+  thumbnailUrl?: string | null;
+  durationSec?: number | null;
   // sangeet
   performer?: string | null;
   cutStartSec?: number | null;
@@ -54,7 +72,7 @@ export type SubmitResult = {
   message: string;
 };
 
-type ListSongRow = Pick<Song, "id" | "normKey" | "spotifyId" | "youtubeId" | "title" | "performer">;
+type ListSongRow = Pick<Song, "id" | "normKey" | "spotifyId" | "youtubeId" | "title" | "performer" | "thumbnailUrl">;
 
 async function listSongs(listId: string): Promise<ListSongRow[]> {
   return db
@@ -65,6 +83,7 @@ async function listSongs(listId: string): Promise<ListSongRow[]> {
       youtubeId: song.youtubeId,
       title: song.title,
       performer: song.performer,
+      thumbnailUrl: song.thumbnailUrl,
     })
     .from(song)
     .where(eq(song.listId, listId));
@@ -111,7 +130,10 @@ export async function submitOne(
   };
 
   const match = findMatch(incoming, existing);
-  const shown = { title, artist, thumbnailUrl: meta?.thumbnailUrl ?? null };
+  const pickedThumb = isAllowedThumbnail(entry.thumbnailUrl) ? entry.thumbnailUrl! : null;
+  const thumbnailUrl = meta?.thumbnailUrl ?? pickedThumb;
+  const durationSec = meta?.durationSec ?? (entry.durationSec && entry.durationSec > 0 ? Math.round(entry.durationSec) : null);
+  const shown = { title, artist, thumbnailUrl };
 
   if (match && match.type !== "near") {
     if (list.kind === "sangeet") {
@@ -133,6 +155,12 @@ export async function submitOne(
         fill.youtubeId = incoming.youtubeId;
         target.youtubeId = incoming.youtubeId;
       }
+    }
+    // A typed song gets the cover art of a later, better suggestion.
+    const target = existing.find((s) => s.id === match.song.id);
+    if (target && !target.thumbnailUrl && thumbnailUrl) {
+      fill.thumbnailUrl = thumbnailUrl.slice(0, 600);
+      target.thumbnailUrl = fill.thumbnailUrl;
     }
     if (Object.keys(fill).length) await db.update(song).set(fill).where(eq(song.id, match.song.id)).catch(() => undefined);
     await db.insert(songSubmission).values({
@@ -156,8 +184,8 @@ export async function submitOne(
       youtubeId: incoming.youtubeId,
       title: title.slice(0, 300),
       artist: artist?.slice(0, 300) ?? null,
-      thumbnailUrl: meta?.thumbnailUrl?.slice(0, 600) ?? null,
-      durationSec: meta?.durationSec ?? null,
+      thumbnailUrl: thumbnailUrl?.slice(0, 600) ?? null,
+      durationSec,
       normKey,
       possibleDupOf: match?.type === "near" ? match.song.id : null,
       sortOrder: await nextSortOrder(list.id),
@@ -185,7 +213,7 @@ export async function submitOne(
     note: who.note ?? null,
     ipHash: who.ipHash,
   });
-  existing.push({ id, normKey, spotifyId: incoming.spotifyId, youtubeId: incoming.youtubeId, title, performer: entry.performer ?? null });
+  existing.push({ id, normKey, spotifyId: incoming.spotifyId, youtubeId: incoming.youtubeId, title, performer: entry.performer ?? null, thumbnailUrl });
   return { input, status: "added", ...shown, message: "Added ✓" };
 }
 

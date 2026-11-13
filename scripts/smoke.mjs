@@ -24,6 +24,8 @@ const CRON_SECRET =
     }
   })();
 const stamp = Date.now().toString(36);
+// A fresh fake address per run, so back-to-back runs never trip the guest rate limit.
+const RUN_IP = `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
 
 let failures = 0;
 function check(label, condition, detail = "") {
@@ -107,7 +109,7 @@ check("a helper can't change wedding settings", (await patch(riya, "/api/setting
 
 const baraat = (await post(keval, "/api/song-lists", { kind: "baraat" }, T)).body?.list;
 check("a baraat list gets guest and DJ links", baraat?.submitSlug && baraat?.djSlug);
-const submit = (slug, body) => call(guest, `/api/public/lists/${slug}/submit`, { method: "POST", body, headers: { "x-real-ip": `10.0.${stamp.length}.7` } });
+const submit = (slug, body) => call(guest, `/api/public/lists/${slug}/submit`, { method: "POST", body, headers: { "x-real-ip": RUN_IP } });
 
 const typed1 = await submit(baraat.submitSlug, { name: "Friend One", entries: [{ title: "Kesariya", artist: "Arijit Singh" }] });
 check("a guest adds a typed song without logging in", typed1.body?.results?.[0]?.status === "added", JSON.stringify(typed1.body));
@@ -119,6 +121,26 @@ check(
   remix.body?.results?.every((r) => r.status === "added"),
   JSON.stringify(remix.body),
 );
+
+const plainName = await submit(baraat.submitSlug, { name: "Friend Four", entries: [{ title: "Dil Le Gayee" }] });
+check("a plain song name with no link is accepted", plainName.body?.results?.[0]?.status === "added", JSON.stringify(plainName.body));
+
+const picked = await submit(baraat.submitSlug, {
+  name: "Friend Five",
+  entries: [
+    { title: "London Thumakda", artist: "Labh Janjua", thumbnailUrl: "https://is1-ssl.mzstatic.com/image/thumb/Music/x/200x200bb.jpg", durationSec: 226 },
+    { title: "Gallan Goodiyaan", thumbnailUrl: "https://evil.example/cat.jpg" },
+  ],
+});
+check("a picked search result keeps its cover art", picked.body?.results?.[0]?.thumbnailUrl?.includes("mzstatic.com"), JSON.stringify(picked.body));
+check("cover art from other sites is dropped", picked.body?.results?.[1]?.thumbnailUrl === null, JSON.stringify(picked.body));
+
+const search = await call(guest, `/api/public/lists/${baraat.submitSlug}/search?q=kesariya`);
+if (search.body?.results?.length) {
+  check("searching by name returns songs with titles", search.body.results.some((r) => /kesariya/i.test(r.title)), JSON.stringify(search.body));
+} else {
+  note(`song search (no internet from the server?): ${JSON.stringify(search.body)}`);
+}
 
 const bot = await submit(baraat.submitSlug, { name: "Bot", website: "http://spam", entries: [{ title: "Spam song" }] });
 const afterBot = await call(guest, `/api/public/lists/${baraat.submitSlug}`);
