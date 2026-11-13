@@ -208,7 +208,9 @@ export const api = {
   ) => request<{ list: SongList }>(`/api/song-lists/${id}`, { method: "PATCH", body: json(input), teamId }).then((r) => r.list),
   deleteSongList: (teamId: string, id: string) => request<void>(`/api/song-lists/${id}`, { method: "DELETE", teamId }),
   listSongs: (teamId: string, listId: string) =>
-    request<{ list: SongList; songs: Song[] }>(`/api/song-lists/${listId}/songs`, { teamId }),
+    request<{ list: SongList; songs: Song[]; youtubeEnabled: boolean }>(`/api/song-lists/${listId}/songs`, { teamId }),
+  findYoutubeLinks: (teamId: string, listId: string) =>
+    request<{ checked: number; found: number }>(`/api/song-lists/${listId}/find-youtube`, { method: "POST", teamId }),
   addSongs: (teamId: string, listId: string, entries: SongEntry[]) =>
     request<{ results: SubmitResult[] }>(`/api/song-lists/${listId}/songs`, { method: "POST", body: json({ entries }), teamId }).then(
       (r) => r.results,

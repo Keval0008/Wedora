@@ -1,3 +1,4 @@
+import { Analytics } from "@vercel/analytics/next";
 import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond, Hind_Vadodara, IBM_Plex_Mono } from "next/font/google";
 import { Providers } from "@/components/providers";
@@ -48,6 +49,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${hind.variable} ${plexMono.variable} ${cormorant.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
         <Providers>{children}</Providers>
+        {/* Cookieless page views; shows up under the project's Analytics tab on Vercel. */}
+        <Analytics />
       </body>
     </html>
   );

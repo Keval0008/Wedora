@@ -50,6 +50,7 @@ export default function SongListPage() {
   useEffect(() => setOrder(data?.songs ?? []), [data?.songs]);
   const [editing, setEditing] = useState<Song | null>(null);
   const [adding, setAdding] = useState("");
+  const [findingYoutube, setFindingYoutube] = useState(false);
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: key });
@@ -129,6 +130,32 @@ export default function SongListPage() {
       <div className="mt-4">
         <ShareButtons list={list} coupleNames={settings?.coupleNames} />
       </div>
+
+      {data.youtubeEnabled && order.some((s) => !s.youtubeId) && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-[10px] border border-rule bg-raised px-3 py-2 text-[13px] text-ink-soft">
+          <span className="min-w-0 flex-1">
+            {order.filter((s) => !s.youtubeId).length} song{order.filter((s) => !s.youtubeId).length === 1 ? " has" : "s have"} no YouTube link for the DJ.
+          </span>
+          <Button
+            size="sm"
+            disabled={findingYoutube}
+            onClick={async () => {
+              setFindingYoutube(true);
+              try {
+                const r = await api.findYoutubeLinks(teamId!, list.id);
+                toast.success(r.found ? `Found ${r.found} of ${r.checked} on YouTube` : "No new YouTube matches (or today's YouTube limit is used up)");
+                refresh();
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Could not search YouTube");
+              } finally {
+                setFindingYoutube(false);
+              }
+            }}
+          >
+            {findingYoutube ? "Searching…" : "Find YouTube links"}
+          </Button>
+        </div>
+      )}
 
       {dups.length > 0 && (
         <section className="mt-6 rounded-[12px] border border-marigold/50 bg-marigold-soft/60 p-3">

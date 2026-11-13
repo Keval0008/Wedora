@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
-import { and, count, eq, gte, sql } from "drizzle-orm";
+import { waitUntil } from "@vercel/functions";
+import { and, count, eq, gte, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, isDuplicateKey } from "../db";
 import { song, songList, songSubmission, type Song, type SongList } from "../db/schema";
@@ -9,6 +10,7 @@ import { newId } from "../lib/ids";
 import { findMatch, normalizeTitle } from "../lib/songs/dedupe";
 import { lookupSong, MetaError, type SongMeta } from "../lib/songs/metadata";
 import { isAllowedThumbnail } from "../lib/songs/search";
+import { findYoutubeId, youtubeConfigured } from "../lib/songs/youtube";
 
 export const SUBMISSIONS_PER_WINDOW = 20;
 export const WINDOW_MS = 10 * 60_000;
@@ -214,7 +216,29 @@ export async function submitOne(
     ipHash: who.ipHash,
   });
   existing.push({ id, normKey, spotifyId: incoming.spotifyId, youtubeId: incoming.youtubeId, title, performer: entry.performer ?? null, thumbnailUrl });
+  // Find it on YouTube for the DJ after replying, so the guest doesn't wait.
+  if (!incoming.youtubeId && youtubeConfigured()) waitUntil(attachYoutube(id, title, artist, !thumbnailUrl));
   return { input, status: "added", ...shown, message: "Added ✓" };
+}
+
+/**
+ * Looks the song up on YouTube and stores the video id (and its thumbnail when
+ * the song had none). Skips quietly if another song on the list already has
+ * that video, or if the day's YouTube quota is used up.
+ */
+export async function attachYoutube(songId: string, title: string, artist: string | null, needsThumbnail: boolean): Promise<boolean> {
+  try {
+    const youtubeId = await findYoutubeId(title, artist);
+    if (!youtubeId) return false;
+    await db
+      .update(song)
+      .set({ youtubeId, ...(needsThumbnail ? { thumbnailUrl: `https://i.ytimg.com/vi/${youtubeId}/mqdefault.jpg` } : {}) })
+      .where(and(eq(song.id, songId), isNull(song.youtubeId)));
+    return true;
+  } catch (error) {
+    if (!isDuplicateKey(error)) console.error("[youtube] could not attach a link:", error);
+    return false;
+  }
 }
 
 export async function submitMany(

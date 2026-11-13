@@ -30,6 +30,8 @@ const EnvSchema = z.object({
 
   SPOTIFY_CLIENT_ID: z.string().optional(),
   SPOTIFY_CLIENT_SECRET: z.string().optional(),
+  /** YouTube Data API key: finds a YouTube link for songs added without one. */
+  YOUTUBE_API_KEY: z.string().optional(),
 
   // Set by Vercel itself.
   VERCEL_ENV: z.string().optional(),

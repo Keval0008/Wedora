@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { affectedRows, db, isDuplicateKey } from "../db";
 import { song, songList, songListKinds, songSubmission } from "../db/schema";
@@ -7,7 +7,8 @@ import { badRequest, conflict, notFound, parse, readJson } from "../lib/http";
 import { newId, newSlug } from "../lib/ids";
 import { normalizeTitle } from "../lib/songs/dedupe";
 import { lookupSong, MetaError } from "../lib/songs/metadata";
-import { SongEntrySchema, submitMany } from "../services/songs";
+import { youtubeConfigured } from "../lib/songs/youtube";
+import { attachYoutube, SongEntrySchema, submitMany } from "../services/songs";
 
 export const songListsRouter = router();
 songListsRouter.use(requireAuth, requireTeam);
@@ -145,7 +146,27 @@ export async function songsWithVotes(listId: string, opts: { includeHidden: bool
 
 songListsRouter.get("/:id/songs", async (c) => {
   const list = await loadList(c.get("team").id, c.req.param("id"));
-  return c.json({ list, songs: await songsWithVotes(list.id, { includeHidden: true }) });
+  return c.json({ list, songs: await songsWithVotes(list.id, { includeHidden: true }), youtubeEnabled: youtubeConfigured() });
+});
+
+/**
+ * POST /api/song-lists/:id/find-youtube — finds YouTube links for songs that
+ * have none, up to 20 at a time (each search uses 1% of the daily free quota).
+ */
+songListsRouter.post("/:id/find-youtube", async (c) => {
+  const list = await loadList(c.get("team").id, c.req.param("id"));
+  if (!youtubeConfigured()) throw badRequest("Add YOUTUBE_API_KEY in Vercel to find YouTube links");
+  const missing = await db
+    .select({ id: song.id, title: song.title, artist: song.artist, thumbnailUrl: song.thumbnailUrl })
+    .from(song)
+    .where(and(eq(song.listId, list.id), isNull(song.youtubeId)))
+    .orderBy(asc(song.sortOrder))
+    .limit(20);
+  let found = 0;
+  for (const s of missing) {
+    if (await attachYoutube(s.id, s.title, s.artist, !s.thumbnailUrl)) found++;
+  }
+  return c.json({ checked: missing.length, found });
 });
 
 /** POST /api/song-lists/:id/songs — the owner adds songs directly, like a guest would. */

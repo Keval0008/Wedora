@@ -103,12 +103,29 @@ That comes to about 43,000 calls a month, each a single indexed query. This fits
    ```
 4. Each family member then opens **Account → Telegram → Connect** and taps START.
 
-### 6. Phone notifications
+### 6. Optional: Spotify search, YouTube links, analytics
+- **Spotify** (`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`):
+  1. Go to developer.spotify.com, open Dashboard and choose Create app.
+  2. Tick **Web API** and save.
+  3. Copy the Client ID and the Client secret from the app's Settings.
+
+  The song form then searches Spotify instead of Apple Music, so every pick carries a Spotify link.
+- **YouTube** (`YOUTUBE_API_KEY`):
+  1. In console.cloud.google.com, create a project.
+  2. Enable **YouTube Data API v3**.
+  3. Under Credentials, create an **API key** and restrict it to that API.
+
+  Each song added without a YouTube link gets one found automatically, about 100 songs a day on the free quota. The song list page also has **Find YouTube links** for older songs.
+- **Analytics:** on Vercel, open Project → **Analytics** → Enable. The `<Analytics />` component is already in the layout.
+
+Add the keys in Vercel → Settings → Environment Variables, then **Redeploy**. New variables only apply to new deployments.
+
+### 7. Phone notifications
 1. Each person opens **Account → Turn on**.
 2. On an **iPhone**, first tap Share → **Add to Home Screen**, then open Wedora from the home screen. iOS only delivers push to installed apps.
 3. Use **Send me a test alert** to check it works.
 
-### 7. First use
+### 8. First use
 1. Sign up and choose **Start a wedding**. This creates the baraat and sangeet lists.
 2. Under **Family**, share the code on WhatsApp. Accept each person as they join, and make the people at the chandla desk **admins** only if they should see the totals.
 3. Under **Songs**, use **Share on WhatsApp** to send each list.
