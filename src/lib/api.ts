@@ -46,7 +46,8 @@ export async function request<T>(path: string, options: RequestInit & { teamId?:
     ...init,
     credentials: "include",
     headers: {
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      // JSON bodies only; a FormData upload sets its own multipart boundary.
+      ...(typeof init.body === "string" ? { "Content-Type": "application/json" } : {}),
       ...(teamId ? { "x-team-id": teamId } : {}),
       ...headers,
     },
@@ -135,6 +136,8 @@ export type PaymentInput = {
   amount: number;
   dueAt?: string | null;
   paid?: boolean;
+  /** When it was paid, for a payment entered after the fact. */
+  paidAt?: string | null;
   method?: PaymentMethod | null;
   note?: string | null;
   assigneeId?: string | null;
@@ -237,7 +240,21 @@ export const api = {
     request<{ vendor: Vendor }>(`/api/vendors/${id}`, { method: "PATCH", body: json(input), teamId }),
   deleteVendor: (teamId: string, id: string) => request<void>(`/api/vendors/${id}`, { method: "DELETE", teamId }),
   addPayment: (teamId: string, vendorId: string, input: PaymentInput) =>
-    request<{ ok: true }>(`/api/vendors/${vendorId}/payments`, { method: "POST", body: json(input), teamId }),
+    request<{ payment: { id: string } }>(`/api/vendors/${vendorId}/payments`, { method: "POST", body: json(input), teamId }),
+  uploadPaymentPhoto: (teamId: string, vendorId: string, paymentId: string, photo: Blob) => {
+    const form = new FormData();
+    form.append("file", photo, "photo.jpg");
+    return request<{ attachment: { id: string; size: number } }>(`/api/vendors/${vendorId}/payments/${paymentId}/attachments`, {
+      method: "POST",
+      body: form,
+      teamId,
+    });
+  },
+  deletePaymentPhoto: (teamId: string, vendorId: string, paymentId: string, attachmentId: string) =>
+    request<void>(`/api/vendors/${vendorId}/payments/${paymentId}/attachments/${attachmentId}`, { method: "DELETE", teamId }),
+  /** For <img src>: images can't send the x-team-id header, so it rides in the query. */
+  paymentPhotoUrl: (teamId: string, vendorId: string, paymentId: string, attachmentId: string) =>
+    `/api/vendors/${vendorId}/payments/${paymentId}/attachments/${attachmentId}?teamId=${encodeURIComponent(teamId)}`,
   updatePayment: (teamId: string, vendorId: string, paymentId: string, input: Partial<PaymentInput>) =>
     request<{ ok: true }>(`/api/vendors/${vendorId}/payments/${paymentId}`, { method: "PATCH", body: json(input), teamId }),
   deletePayment: (teamId: string, vendorId: string, paymentId: string) =>

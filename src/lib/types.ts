@@ -252,6 +252,8 @@ export type VendorPayment = {
   note: string | null;
   taskId: string | null;
   assigneeId: string | null;
+  /** Photos of the delivery slip or payment proof. */
+  attachments: Array<{ id: string; size: number }>;
 };
 
 export type Vendor = {

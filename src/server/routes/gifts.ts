@@ -19,7 +19,8 @@ const GiftInput = z.object({
   relation: z.string().trim().max(80).nullable().optional(),
   side: z.enum(giftSides).nullable().optional(),
   city: z.string().trim().max(80).nullable().optional(),
-  kind: z.enum(giftKinds).default("cash"),
+  // Not .default(): it would also apply to PATCH and reset the kind.
+  kind: z.enum(giftKinds).optional(),
   amount: z.number().int().min(0).max(100_000_000).nullable().optional(),
   description: z.string().trim().max(300).nullable().optional(),
   functionId: z.string().max(36).nullable().optional(),
@@ -162,7 +163,7 @@ giftsRouter.post("/", async (c) => {
       relation: input.relation ?? null,
       side: input.side ?? null,
       city: input.city ?? null,
-      kind: input.kind,
+      kind: input.kind ?? "cash",
       amount: input.amount ?? null,
       description: input.description ?? null,
       functionId: input.functionId ?? null,

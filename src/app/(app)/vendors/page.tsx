@@ -1,8 +1,8 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, Check, MessageCircle, Pencil, Phone, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { BellRing, Camera, Check, Loader2, MessageCircle, Paperclip, Pencil, Phone, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useConfirm } from "@/components/confirm";
 import { useMembers } from "@/components/tasks/use-tasks";
@@ -10,6 +10,7 @@ import { useTeam } from "@/components/team-context";
 import { Button, DateField, EmptyState, Input, Label, Select, Sheet, Textarea, TimeField } from "@/components/ui";
 import { api, type PaymentInput, type VendorInput } from "@/lib/api";
 import { useSession } from "@/lib/auth-client";
+import { compressImage } from "@/lib/image";
 import { cn, combineDateTime, formatWhen, phoneDigits, rupees, toDateInputValue, toTimeInputValue } from "@/lib/format";
 import { METHOD_LABEL, PAYMENT_METHODS, VENDOR_CATEGORIES, type PaymentMethod, type Vendor, type VendorPayment } from "@/lib/types";
 
@@ -155,6 +156,12 @@ export default function VendorsPage() {
                           </span>
                           {p.note && <span className="block truncate text-[12px] text-ink-muted">{p.note}</span>}
                         </button>
+                        {p.attachments.length > 0 && (
+                          <span className="inline-flex shrink-0 items-center gap-0.5 font-mono text-[11px] text-ink-muted" title="Photos attached">
+                            <Paperclip className="size-3.5" />
+                            {p.attachments.length}
+                          </span>
+                        )}
                         {!p.paidAt && p.taskId && <BellRing className="size-3.5 shrink-0 text-marigold" aria-label="Reminder set" />}
                       </li>
                     ))}
@@ -299,6 +306,12 @@ function VendorSheet({
   );
 }
 
+
+const MAX_PHOTOS = 5;
+const todayKey = () => toDateInputValue(new Date());
+
+type PendingPhoto = { id: string; blob: Blob; url: string };
+
 function PaymentSheet({
   state,
   onClose,
@@ -312,13 +325,19 @@ function PaymentSheet({
   const { data: session } = useSession();
   const { data: members = [] } = useMembers();
   const confirm = useConfirm();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [amountText, setAmountText] = useState("");
   const [paid, setPaid] = useState(false);
+  const [paidDate, setPaidDate] = useState(todayKey);
   const [dueDate, setDueDate] = useState("");
   const [dueTime, setDueTime] = useState("10:00");
   const [method, setMethod] = useState<PaymentMethod | "">("");
   const [note, setNote] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
+  const [photos, setPhotos] = useState<Array<{ id: string; size: number }>>([]);
+  const [pending, setPending] = useState<PendingPhoto[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const [saving, setSaving] = useState(false);
   const [openedFor, setOpenedFor] = useState<string | null>(null);
 
   const key = state ? (state.payment?.id ?? `new-${state.vendor.id}`) : null;
@@ -327,31 +346,90 @@ function PaymentSheet({
     const p = state?.payment;
     setAmountText(p ? String(p.amount) : state ? String(state.vendor.totals.unscheduled || "") : "");
     setPaid(Boolean(p?.paidAt));
+    setPaidDate(p?.paidAt ? toDateInputValue(p.paidAt) : todayKey());
     setDueDate(p?.dueAt ? toDateInputValue(p.dueAt) : "");
     setDueTime(p?.dueAt ? toTimeInputValue(p.dueAt) : "10:00");
     setMethod(p?.method ?? "");
     setNote(p?.note ?? "");
     setAssigneeId(p?.assigneeId ?? "");
+    setPhotos(p?.attachments ?? []);
+    setPending([]);
   }
+
+  // Previews of photos not yet uploaded are released when the page goes away.
+  const previewUrls = useRef<string[]>([]);
+  useEffect(() => () => previewUrls.current.forEach((u) => URL.revokeObjectURL(u)), []);
+
   if (!state) return null;
   const { vendor, payment } = state;
+  const photoCount = photos.length + pending.length;
+
+  const upload = async (paymentId: string, blob: Blob) => {
+    const { attachment } = await api.uploadPaymentPhoto(teamId!, vendor.id, paymentId, blob);
+    setPhotos((list) => [...list, attachment]);
+  };
+
+  const pickPhotos = async (files: FileList | null) => {
+    const chosen = [...(files ?? [])].slice(0, MAX_PHOTOS - photoCount);
+    if (fileRef.current) fileRef.current.value = "";
+    if (!chosen.length) return;
+    setUploading((n) => n + chosen.length);
+    for (const file of chosen) {
+      try {
+        const blob = await compressImage(file);
+        if (payment) {
+          await upload(payment.id, blob);
+          onSaved();
+        } else {
+          const url = URL.createObjectURL(blob);
+          previewUrls.current.push(url);
+          setPending((list) => [...list, { id: `${Date.now()}-${Math.random()}`, blob, url }]);
+        }
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Could not add that photo");
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    }
+  };
+
+  const removePhoto = async (id: string) => {
+    if (!payment) return;
+    if (!(await confirm({ title: "Remove this photo?", confirmLabel: "Remove", tone: "danger" }))) return;
+    try {
+      await api.deletePaymentPhoto(teamId!, vendor.id, payment.id, id);
+      setPhotos((list) => list.filter((p) => p.id !== id));
+      onSaved();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not remove the photo");
+    }
+  };
 
   const save = async () => {
     const input: PaymentInput = {
       amount: toAmount(amountText),
       paid,
+      // Noon local time, so the day never shifts across time zones.
+      paidAt: paid ? combineDateTime(paidDate || todayKey(), "12:00") : null,
       dueAt: paid ? (payment?.dueAt ?? null) : combineDateTime(dueDate, dueTime),
       method: method || null,
       note: note.trim() || null,
       assigneeId: assigneeId || null,
     };
+    setSaving(true);
     try {
-      if (payment) await api.updatePayment(teamId!, vendor.id, payment.id, input);
-      else await api.addPayment(teamId!, vendor.id, input);
+      if (payment) {
+        await api.updatePayment(teamId!, vendor.id, payment.id, input);
+      } else {
+        const { payment: created } = await api.addPayment(teamId!, vendor.id, input);
+        for (const p of pending) await upload(created.id, p.blob);
+      }
       onSaved();
       onClose();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not save");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -367,7 +445,7 @@ function PaymentSheet({
               size="sm"
               variant="danger"
               onClick={async () => {
-                if (!(await confirm({ title: "Delete this payment?", confirmLabel: "Delete", tone: "danger" }))) return;
+                if (!(await confirm({ title: "Delete this payment?", body: "Its photos are deleted too.", confirmLabel: "Delete", tone: "danger" }))) return;
                 await api.deletePayment(teamId!, vendor.id, payment.id);
                 onSaved();
                 onClose();
@@ -376,8 +454,14 @@ function PaymentSheet({
               <Trash2 className="size-4" /> Delete
             </Button>
           )}
-          <Button size="sm" variant="primary" className="ml-auto" disabled={!toAmount(amountText)} onClick={() => void save()}>
-            Save
+          <Button
+            size="sm"
+            variant="primary"
+            className="ml-auto"
+            disabled={!toAmount(amountText) || saving || uploading > 0}
+            onClick={() => void save()}
+          >
+            {saving ? "Saving…" : "Save"}
           </Button>
         </div>
       }
@@ -397,7 +481,13 @@ function PaymentSheet({
             </Button>
           ))}
         </div>
-        {!paid && (
+        {paid ? (
+          <div>
+            <Label htmlFor="p-paid-on">Paid on</Label>
+            <DateField id="p-paid-on" value={paidDate} onChange={(v) => setPaidDate(v || todayKey())} />
+            {paidDate > todayKey() && <p className="mt-1.5 text-[12px] text-urgent">That&apos;s in the future — pick the day it was paid.</p>}
+          </div>
+        ) : (
           <>
             <div className="grid grid-cols-[1fr_auto] gap-2">
               <div>
@@ -438,6 +528,64 @@ function PaymentSheet({
         <div>
           <Label htmlFor="p-note">Note</Label>
           <Input id="p-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Advance, balance after the event…" />
+        </div>
+
+        <div>
+          <Label>Slip or payment proof</Label>
+          <div className="flex flex-wrap gap-2">
+            {photos.map((p) => {
+              const url = api.paymentPhotoUrl(teamId!, vendor.id, payment!.id, p.id);
+              return (
+                <div key={p.id} className="relative">
+                  <a href={url} target="_blank" rel="noreferrer" title="Open full size">
+                    {/* eslint-disable-next-line @next/next/no-img-element -- private photo served by our API */}
+                    <img src={url} alt="Payment proof" className="size-20 rounded-[8px] border border-rule object-cover" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => void removePhoto(p.id)}
+                    aria-label="Remove photo"
+                    className="absolute -right-1.5 -top-1.5 flex size-6 items-center justify-center rounded-full border border-rule-strong bg-raised text-ink-muted shadow hover:text-urgent"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+            {pending.map((p) => (
+              <div key={p.id} className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element -- local preview before upload */}
+                <img src={p.url} alt="Photo to upload" className="size-20 rounded-[8px] border border-dashed border-rule-strong object-cover opacity-90" />
+                <button
+                  type="button"
+                  onClick={() => setPending((list) => list.filter((x) => x.id !== p.id))}
+                  aria-label="Remove photo"
+                  className="absolute -right-1.5 -top-1.5 flex size-6 items-center justify-center rounded-full border border-rule-strong bg-raised text-ink-muted shadow hover:text-urgent"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+            {uploading > 0 && (
+              <div className="flex size-20 items-center justify-center rounded-[8px] border border-dashed border-rule-strong text-ink-muted">
+                <Loader2 className="size-5 animate-spin" />
+              </div>
+            )}
+            {photoCount + uploading < MAX_PHOTOS && (
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="flex size-20 flex-col items-center justify-center gap-1 rounded-[8px] border border-dashed border-rule-strong text-[11px] text-ink-muted hover:border-signal hover:text-signal"
+              >
+                <Camera className="size-5" />
+                Add photo
+              </button>
+            )}
+          </div>
+          <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => void pickPhotos(e.target.files)} />
+          <p className="mt-1.5 text-[12px] text-ink-muted">
+            Delivery slip, bill or UPI screenshot. Up to {MAX_PHOTOS}; only family members signed in can see them.
+          </p>
         </div>
       </div>
     </Sheet>

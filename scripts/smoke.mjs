@@ -247,6 +247,54 @@ const reopened = await call(riya, `/api/tasks/${payTaskId}`, { teamId: T });
 check("marking it unpaid reopens the to-do", reopened.body?.task?.status === "todo", JSON.stringify(reopened.body?.task?.status));
 check("the payment's to-do can't be deleted on its own", (await call(keval, `/api/tasks/${payTaskId}`, { method: "DELETE", teamId: T })).status === 400);
 
+// A payment made last week, entered today.
+const lastWeek = new Date(Date.now() - 7 * 86_400_000).toISOString();
+const past = await post(keval, `/api/vendors/${v.id}/payments`, { amount: 5000, paid: true, paidAt: lastWeek, method: "cash" }, T);
+check("an earlier payment keeps the day it was paid", past.status === 201 && Math.abs(new Date(past.body?.payment?.paidAt) - new Date(lastWeek)) < 1000, JSON.stringify(past.body));
+const future = await post(keval, `/api/vendors/${v.id}/payments`, { amount: 5000, paid: true, paidAt: new Date(Date.now() + 5 * 86_400_000).toISOString() }, T);
+check("a paid date in the future is refused", future.status === 400, JSON.stringify(future.body));
+const nineDaysAgo = new Date(Date.now() - 9 * 86_400_000).toISOString();
+const fixed = await patch(keval, `/api/vendors/${v.id}/payments/${past.body.payment.id}`, { paidAt: nineDaysAgo }, T);
+check(
+  "the paid date can be corrected later, and it stays paid",
+  fixed.status === 200 && fixed.body?.payment?.paidAt && Math.abs(new Date(fixed.body.payment.paidAt) - new Date(nineDaysAgo)) < 1000,
+  JSON.stringify(fixed.body),
+);
+const noteOnly = await patch(keval, `/api/vendors/${v.id}/payments/${past.body.payment.id}`, { note: "Advance" }, T);
+check("editing only the note leaves the payment paid", Boolean(noteOnly.body?.payment?.paidAt), JSON.stringify(noteOnly.body));
+const renamed = await patch(keval, `/api/vendors/${v.id}`, { contactName: "Rajubhai" }, T);
+check(
+  "editing one vendor field leaves the category and total alone",
+  renamed.body?.vendor?.category === "caterer" && renamed.body?.vendor?.totalAmount === 125000,
+  JSON.stringify(renamed.body?.vendor),
+);
+
+// Photo of the slip: a real 1×1 PNG.
+const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const photoPath = `/api/vendors/${v.id}/payments/${past.body.payment.id}/attachments`;
+const uploadPhoto = (actor, bytes, type) => {
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type }), "slip.png");
+  return fetch(`${BASE}${photoPath}`, { method: "POST", headers: { origin: ORIGIN, "x-team-id": T, cookie: actor.header() }, body: form });
+};
+const up = await uploadPhoto(riya, png, "image/png");
+const upBody = await up.json();
+check("a helper attaches a photo of the slip", up.status === 201 && upBody.attachment?.id, JSON.stringify(upBody));
+const fake = await uploadPhoto(riya, Buffer.from("<svg onload=alert(1)>"), "image/png");
+check("a file that isn't really an image is refused", fake.status === 400);
+const photo = await fetch(`${BASE}${photoPath}/${upBody.attachment.id}?teamId=${T}`, { headers: { cookie: keval.header() } });
+const photoBytes = Buffer.from(await photo.arrayBuffer());
+check("the photo comes back as the same PNG", photo.status === 200 && photo.headers.get("content-type") === "image/png" && photoBytes.equals(png));
+const listed = (await call(keval, "/api/vendors", { teamId: T })).body?.vendors?.find((x) => x.id === v.id)?.payments?.find((p) => p.id === past.body.payment.id);
+check("the vendor list shows the photo, not its bytes", listed?.attachments?.length === 1 && !("data" in listed.attachments[0]), JSON.stringify(listed?.attachments));
+const stranger = makeActor("stranger");
+await post(stranger, "/api/auth/sign-up/passcode", { name: "Stranger", username: `str_${stamp}`, passcode: "613852" });
+const peek = await fetch(`${BASE}${photoPath}/${upBody.attachment.id}?teamId=${T}`, { headers: { cookie: stranger.header() } });
+check("someone outside the wedding can't open the photo", peek.status === 403);
+check("nobody signed out can open the photo", (await fetch(`${BASE}${photoPath}/${upBody.attachment.id}?teamId=${T}`)).status === 401);
+const del = await call(keval, `${photoPath}/${upBody.attachment.id}`, { method: "DELETE", teamId: T });
+check("a photo can be removed", del.status === 204);
+
 /* --------------------------------------------------------------- functions */
 
 const fn = (await post(keval, "/api/functions", { name: "Sangeet", date: "2026-12-02", startTime: "19:00", venue: "Party plot" }, T)).body?.function;
@@ -269,6 +317,11 @@ const gift1again = await post(riya, "/api/gifts", { giverName: "Rameshbhai Patel
 check("a helper writes a chandla entry", gift1.status === 201);
 check("an offline retry with the same client id is stored once", gift1again.body?.duplicate === true, JSON.stringify(gift1again.body));
 await post(keval, "/api/gifts", { giverName: "Sureshbhai Shah", amount: 2100, kind: "cash", side: "bride" }, T);
+const gold = await post(keval, "/api/gifts", { giverName: "Masi", kind: "gold", description: "Ring" }, T);
+await patch(keval, `/api/gifts/${gold.body.id}`, { relation: "Masi" }, T);
+const goldAfter = (await call(keval, "/api/gifts?q=Masi", { teamId: T })).body?.gifts?.find((g) => g.id === gold.body.id);
+check("editing a chandla entry keeps its kind", goldAfter?.kind === "gold", JSON.stringify(goldAfter));
+await call(keval, `/api/gifts/${gold.body.id}`, { method: "DELETE", teamId: T });
 const riyaList = await call(riya, "/api/gifts", { teamId: T });
 check("a helper sees only their own entries", riyaList.body?.gifts?.length === 1 && riyaList.body?.canSeeAll === false, JSON.stringify(riyaList.body));
 check("a helper can't read the totals", (await call(riya, "/api/gifts/summary", { teamId: T })).status === 403);

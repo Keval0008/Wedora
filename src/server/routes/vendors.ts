@@ -1,22 +1,28 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { affectedRows, db } from "../db";
-import { paymentMethods, reminderPresets, task, vendor, vendorPayment, type VendorPayment } from "../db/schema";
+import { paymentAttachment, paymentMethods, reminderPresets, task, vendor, vendorPayment, type VendorPayment } from "../db/schema";
 import { requireAuth, requireTeam, requireTeamAdmin, router } from "../hono";
-import { notFound, parse, readJson } from "../lib/http";
+import { badRequest, HttpError, notFound, parse, readJson } from "../lib/http";
 import { newId } from "../lib/ids";
+import { sniffImage } from "../lib/images";
 import { rupees, vendorTotals } from "../lib/money";
 import { assertRefsInTeam, replaceReminders, shiftPresetReminders } from "../services/tasks";
 
 export const vendorsRouter = router();
 vendorsRouter.use(requireAuth, requireTeam);
 
+/*
+ * No .default() in these schemas: Zod 4 keeps defaults under .partial(), so a
+ * PATCH that leaves a field out would quietly reset it. Defaults are applied
+ * in the POST handlers instead.
+ */
 const VendorInput = z.object({
   name: z.string().trim().min(1, "Name the vendor").max(150),
-  category: z.string().trim().min(1).max(40).default("other"),
+  category: z.string().trim().min(1).max(40).optional(),
   contactName: z.string().trim().max(120).nullable().optional(),
   phone: z.string().trim().max(20).regex(/^[+\d\s()-]*$/, "Use digits only for the phone").nullable().optional(),
-  totalAmount: z.number().int().min(0).max(1_000_000_000).default(0),
+  totalAmount: z.number().int().min(0).max(1_000_000_000).optional(),
   notes: z.string().max(5000).nullable().optional(),
 });
 
@@ -39,11 +45,25 @@ vendorsRouter.get("/", async (c) => {
         .orderBy(asc(vendorPayment.dueAt), asc(vendorPayment.createdAt))
     : [];
 
+  // Photo details only; the bytes are fetched one at a time when shown.
+  const attachments = payments.length
+    ? await db
+        .select({ id: paymentAttachment.id, paymentId: paymentAttachment.paymentId, size: paymentAttachment.size })
+        .from(paymentAttachment)
+        .where(inArray(paymentAttachment.paymentId, payments.map((p) => p.payment.id)))
+        .orderBy(asc(paymentAttachment.createdAt))
+    : [];
+
   const rows = vendors.map((v) => {
     const own = payments.filter((p) => p.payment.vendorId === v.id);
     return {
       ...v,
-      payments: own.map((p) => ({ ...p.payment, taskId: p.taskId, assigneeId: p.taskAssigneeId })),
+      payments: own.map((p) => ({
+        ...p.payment,
+        taskId: p.taskId,
+        assigneeId: p.taskAssigneeId,
+        attachments: attachments.filter((a) => a.paymentId === p.payment.id).map(({ id, size }) => ({ id, size })),
+      })),
       totals: vendorTotals(v.totalAmount, own.map((p) => p.payment)),
     };
   });
@@ -67,7 +87,16 @@ vendorsRouter.get("/", async (c) => {
 vendorsRouter.post("/", async (c) => {
   const input = parse(VendorInput, await readJson(c.req.raw));
   const id = newId();
-  await db.insert(vendor).values({ id, organizationId: c.get("team").id, ...input, contactName: input.contactName ?? null, phone: input.phone ?? null, notes: input.notes ?? null });
+  await db.insert(vendor).values({
+    id,
+    organizationId: c.get("team").id,
+    name: input.name,
+    category: input.category ?? "other",
+    totalAmount: input.totalAmount ?? 0,
+    contactName: input.contactName ?? null,
+    phone: input.phone ?? null,
+    notes: input.notes ?? null,
+  });
   return c.json({ vendor: await loadVendor(c.get("team").id, id) }, 201);
 });
 
@@ -99,7 +128,9 @@ const PAYMENT_REMINDERS = ["1d", "morning"] as const;
 const PaymentInput = z.object({
   amount: z.number().int().min(1, "Enter an amount").max(1_000_000_000),
   dueAt: z.iso.datetime({ offset: true }).nullable().optional(),
-  paid: z.boolean().default(false),
+  paid: z.boolean().optional(),
+  /** When it was paid, for payments made before they were entered. Defaults to now. */
+  paidAt: z.iso.datetime({ offset: true }).nullable().optional(),
   method: z.enum(paymentMethods).nullable().optional(),
   note: z.string().trim().max(300).nullable().optional(),
   /** Who should get the reminder for a due payment. Defaults to whoever added it. */
@@ -154,9 +185,17 @@ async function syncPaymentTask(
   if (Boolean(p.paidAt) !== isDone) {
     await db
       .update(task)
-      .set({ status: p.paidAt ? "done" : "todo", completedAt: p.paidAt ? new Date() : null })
+      .set({ status: p.paidAt ? "done" : "todo", completedAt: p.paidAt ?? null })
       .where(eq(task.id, existing.id));
   }
+}
+
+/** A paid date from the form: anything up to a day ahead (time zones), never further. */
+function paidDate(iso: string | null | undefined, fallback: Date): Date {
+  if (!iso) return fallback;
+  const d = new Date(iso);
+  if (d.getTime() > Date.now() + 36 * 60 * 60_000) throw badRequest("The paid date can't be in the future");
+  return d;
 }
 
 vendorsRouter.post("/:id/payments", async (c) => {
@@ -171,7 +210,7 @@ vendorsRouter.post("/:id/payments", async (c) => {
     vendorId: v.id,
     amount: input.amount,
     dueAt: input.dueAt ? new Date(input.dueAt) : null,
-    paidAt: input.paid ? new Date() : null,
+    paidAt: input.paid ? paidDate(input.paidAt, new Date()) : null,
     method: input.method ?? null,
     note: input.note ?? null,
     createdById: c.get("user").id,
@@ -196,7 +235,11 @@ vendorsRouter.patch("/:id/payments/:paymentId", async (c) => {
   const patch: Partial<typeof vendorPayment.$inferInsert> = {};
   if (input.amount !== undefined) patch.amount = input.amount;
   if (input.dueAt !== undefined) patch.dueAt = input.dueAt ? new Date(input.dueAt) : null;
-  if (input.paid !== undefined) patch.paidAt = input.paid ? (current.paidAt ?? new Date()) : null;
+  if (input.paid !== undefined) {
+    patch.paidAt = input.paid ? paidDate(input.paidAt, current.paidAt ?? new Date()) : null;
+  } else if (input.paidAt && current.paidAt) {
+    patch.paidAt = paidDate(input.paidAt, current.paidAt);
+  }
   if (input.method !== undefined) patch.method = input.method;
   if (input.note !== undefined) patch.note = input.note;
   if (Object.keys(patch).length) await db.update(vendorPayment).set(patch).where(eq(vendorPayment.id, current.id));
@@ -212,6 +255,85 @@ vendorsRouter.delete("/:id/payments/:paymentId", async (c) => {
   const result = await db.delete(vendorPayment).where(and(eq(vendorPayment.id, paymentId), eq(vendorPayment.vendorId, v.id)));
   if (affectedRows(result) === 0) throw notFound("Payment not found");
   await db.delete(task).where(eq(task.vendorPaymentId, paymentId));
+  return c.body(null, 204);
+});
+
+/* ------------------------------------------------- slip and proof photos */
+
+const MAX_PHOTO_BYTES = 3 * 1024 * 1024;
+const MAX_PHOTOS_PER_PAYMENT = 5;
+
+async function loadPayment(teamId: string, vendorId: string, paymentId: string) {
+  const v = await loadVendor(teamId, vendorId);
+  const [p] = await db
+    .select()
+    .from(vendorPayment)
+    .where(and(eq(vendorPayment.id, paymentId), eq(vendorPayment.vendorId, v.id)))
+    .limit(1);
+  if (!p) throw notFound("Payment not found");
+  return p;
+}
+
+/** POST /api/vendors/:id/payments/:paymentId/attachments — multipart form, field "file". */
+vendorsRouter.post("/:id/payments/:paymentId/attachments", async (c) => {
+  const teamId = c.get("team").id;
+  const p = await loadPayment(teamId, c.req.param("id"), c.req.param("paymentId"));
+
+  const [existing] = await db.select({ n: count() }).from(paymentAttachment).where(eq(paymentAttachment.paymentId, p.id));
+  if (Number(existing?.n ?? 0) >= MAX_PHOTOS_PER_PAYMENT) throw badRequest(`Up to ${MAX_PHOTOS_PER_PAYMENT} photos per payment`);
+
+  const form = await c.req.formData().catch(() => null);
+  const file = form?.get("file");
+  if (!(file instanceof File)) throw badRequest("Choose a photo to upload");
+  if (file.size > MAX_PHOTO_BYTES) throw new HttpError(413, "That photo is too large (max 3 MB)");
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const mimeType = sniffImage(bytes);
+  if (!mimeType) throw badRequest("Only JPEG, PNG or WebP photos can be attached");
+
+  const id = newId();
+  await db.insert(paymentAttachment).values({
+    id,
+    organizationId: teamId,
+    paymentId: p.id,
+    mimeType,
+    size: bytes.length,
+    data: Buffer.from(bytes),
+    uploadedById: c.get("user").id,
+  });
+  return c.json({ attachment: { id, size: bytes.length } }, 201);
+});
+
+/**
+ * GET /api/vendors/:id/payments/:paymentId/attachments/:attachmentId?teamId=
+ * The photo itself. An <img> can't send headers, so the wedding comes from ?teamId=.
+ */
+vendorsRouter.get("/:id/payments/:paymentId/attachments/:attachmentId", async (c) => {
+  const p = await loadPayment(c.get("team").id, c.req.param("id"), c.req.param("paymentId"));
+  const [a] = await db
+    .select()
+    .from(paymentAttachment)
+    .where(and(eq(paymentAttachment.id, c.req.param("attachmentId")), eq(paymentAttachment.paymentId, p.id)))
+    .limit(1);
+  if (!a) throw notFound("Photo not found");
+  return new Response(new Uint8Array(a.data), {
+    headers: {
+      "Content-Type": a.mimeType,
+      "Content-Length": String(a.size),
+      // A photo never changes under its id; only the signed-in browser may keep it.
+      "Cache-Control": "private, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": `inline; filename="payment-proof-${a.id}.${a.mimeType.split("/")[1]}"`,
+    },
+  });
+});
+
+vendorsRouter.delete("/:id/payments/:paymentId/attachments/:attachmentId", async (c) => {
+  const p = await loadPayment(c.get("team").id, c.req.param("id"), c.req.param("paymentId"));
+  const result = await db
+    .delete(paymentAttachment)
+    .where(and(eq(paymentAttachment.id, c.req.param("attachmentId")), eq(paymentAttachment.paymentId, p.id)));
+  if (affectedRows(result) === 0) throw notFound("Photo not found");
   return c.body(null, 204);
 });
 

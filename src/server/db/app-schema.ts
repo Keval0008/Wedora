@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  customType,
   datetime,
   index,
   int,
@@ -345,6 +346,35 @@ export const vendorPayment = mysqlTable(
 );
 
 export type VendorPayment = typeof vendorPayment.$inferSelect;
+
+/** Up to 16 MB of bytes; mysql2 reads and writes it as a Buffer. */
+const mediumBlob = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "mediumblob",
+});
+
+/**
+ * A photo of a delivery slip or payment proof. Kept in the database (shrunk
+ * on the phone first, ~200–400 KB) so it is private to the wedding without a
+ * separate file store.
+ */
+export const paymentAttachment = mysqlTable(
+  "payment_attachment",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    organizationId: orgId(),
+    paymentId: varchar("payment_id", { length: 36 })
+      .notNull()
+      .references(() => vendorPayment.id, { onDelete: "cascade" }),
+    mimeType: varchar("mime_type", { length: 40 }).notNull(),
+    size: int("size").notNull(),
+    data: mediumBlob("data").notNull(),
+    uploadedById: varchar("uploaded_by_id", { length: 36 })
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("attachment_payment_idx").on(t.paymentId)],
+);
 
 /* ============================================================ chandla register */
 
