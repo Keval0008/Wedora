@@ -316,7 +316,7 @@ export const publicApi = {
       `/api/public/lists/${slug}/preview?url=${encodeURIComponent(url)}`,
     ),
   search: (slug: string, q: string) =>
-    request<{ results: SearchResult[]; source: "spotify" | "itunes" | null }>(
+    request<{ results: SearchResult[]; source: "spotify" | "itunes" | null; unavailable?: true }>(
       `/api/public/lists/${slug}/search?q=${encodeURIComponent(q)}`,
     ),
   submit: (slug: string, body: { name: string; note?: string; website?: string; entries: SongEntry[] }) =>

@@ -1,22 +1,12 @@
 import "server-only";
 import { getEnv } from "../../env";
-import { cleanDisplayTitle, normalizeArtist, normalizeTitle } from "./dedupe";
+import { dedupeResults, fromItunes, itunesSearchUrl, type ItunesSearch, type SearchResult } from "./catalogue";
 import { spotifyTrackUrl } from "./parse-link";
 
-export type SearchResult = {
-  source: "spotify" | "itunes";
-  title: string;
-  artist: string | null;
-  /** Album or film, shown under the title. */
-  album: string | null;
-  thumbnailUrl: string | null;
-  durationSec: number | null;
-  /** A Spotify track link when the result came from Spotify. */
-  link: string | null;
-};
+export { dedupeResults };
+export type { SearchResult };
 
 const TIMEOUT_MS = 5000;
-const LIMIT = 6;
 
 /* --------------------------------------------------------------- Spotify */
 
@@ -75,58 +65,29 @@ async function searchSpotify(q: string): Promise<SearchResult[] | null> {
 
 /* ---------------------------------------------------------------- iTunes */
 
-type ItunesSearch = {
-  results?: Array<{
-    trackName?: string;
-    artistName?: string;
-    collectionName?: string;
-    artworkUrl100?: string;
-    trackTimeMillis?: number;
-  }>;
-};
-
-/** Apple's public catalogue: no key, and strong on Bollywood in the India store. */
 async function searchItunes(q: string): Promise<SearchResult[] | null> {
-  const url = `https://itunes.apple.com/search?entity=song&country=IN&limit=15&term=${encodeURIComponent(q)}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(() => null);
+  const res = await fetch(itunesSearchUrl(q), { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(() => null);
+  // On Cloudflare Workers Apple answers 403/429: it rate-limits the IP addresses
+  // every Worker shares. The guest's browser then searches iTunes itself.
   if (!res?.ok) return null;
   const data = (await res.json().catch(() => null)) as ItunesSearch | null;
-  if (!data) return null;
-  return (data.results ?? [])
-    .filter((r) => r.trackName)
-    .map((r) => ({
-      source: "itunes" as const,
-      title: cleanDisplayTitle(r.trackName!),
-      artist: r.artistName ?? null,
-      album: r.collectionName ?? null,
-      // 100x100 is tiny on a phone; the same URL serves larger sizes.
-      thumbnailUrl: r.artworkUrl100?.replace("100x100bb", "200x200bb") ?? null,
-      durationSec: r.trackTimeMillis ? Math.round(r.trackTimeMillis / 1000) : null,
-      link: null,
-    }));
+  return data ? fromItunes(data) : null;
 }
 
 /* ---------------------------------------------------------------- shared */
 
-/** The same recording often appears several times (single, album, film soundtrack). */
-export function dedupeResults(results: SearchResult[]): SearchResult[] {
-  const seen = new Set<string>();
-  const out: SearchResult[] = [];
-  for (const r of results) {
-    const firstArtist = normalizeArtist(r.artist?.split(/,|&/)[0]);
-    const key = `${normalizeTitle(r.title, r.artist)}|${firstArtist}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(r);
-  }
-  return out.slice(0, LIMIT);
-}
-
 const cache = new Map<string, { at: number; results: SearchResult[] }>();
 const CACHE_MS = 30 * 60_000;
 
+export type SearchResponse = {
+  results: SearchResult[];
+  source: "spotify" | "itunes" | null;
+  /** No catalogue answered (not "no match"): the browser should search iTunes itself. */
+  unavailable?: true;
+};
+
 /** Spotify when keys are set (results carry a Spotify link), otherwise iTunes. */
-export async function searchSongs(query: string): Promise<{ results: SearchResult[]; source: "spotify" | "itunes" | null }> {
+export async function searchSongs(query: string): Promise<SearchResponse> {
   const q = query.trim().replace(/\s+/g, " ").slice(0, 100);
   if (q.length < 2) return { results: [], source: null };
   const key = q.toLowerCase();
@@ -134,7 +95,7 @@ export async function searchSongs(query: string): Promise<{ results: SearchResul
   if (hit && Date.now() - hit.at < CACHE_MS) return { results: hit.results, source: hit.results[0]?.source ?? null };
 
   const raw = (await searchSpotify(q)) ?? (await searchItunes(q));
-  if (raw === null) return { results: [], source: null };
+  if (raw === null) return { results: [], source: null, unavailable: true };
   const results = dedupeResults(raw);
   if (cache.size > 1000) cache.clear();
   cache.set(key, { at: Date.now(), results });

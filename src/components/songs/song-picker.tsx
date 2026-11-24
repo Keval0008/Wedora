@@ -4,7 +4,8 @@ import { Check, CircleAlert, Loader2, Plus, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SongThumb } from "@/components/songs/song-bits";
 import { publicApi, type SongEntry } from "@/lib/api";
-// Pure string functions, shared with the server so the hint matches what it will do.
+// Pure functions, shared with the server so the hint and results match what it does.
+import { dedupeResults, fromItunes, itunesSearchUrl, type ItunesSearch } from "@/server/lib/songs/catalogue";
 import { normalizeTitle } from "@/server/lib/songs/dedupe";
 import { cn, mmss } from "@/lib/format";
 import type { SearchResult, SongMeta } from "@/lib/types";
@@ -52,6 +53,19 @@ function fromSearch(r: SearchResult): SongPick {
     durationSec: r.durationSec,
     link: r.link,
   };
+}
+
+/**
+ * Asks Apple from this browser. Used when the server couldn't: on Cloudflare
+ * Workers, Apple refuses or rate-limits the IP addresses all Workers share,
+ * while each guest's own address is fine. Apple allows this (CORS: *).
+ */
+async function searchItunesHere(q: string): Promise<{ results: SearchResult[]; source: "spotify" | "itunes" | null }> {
+  const res = await fetch(itunesSearchUrl(q), { signal: AbortSignal.timeout(6000) }).catch(() => null);
+  const data = res?.ok ? ((await res.json().catch(() => null)) as ItunesSearch | null) : null;
+  if (!data) throw new Error("Search isn't working right now. You can still add the song as you typed it.");
+  const results = dedupeResults(fromItunes(data));
+  return { results, source: results.length > 0 ? "itunes" : null };
 }
 
 function fromMeta(link: string, m: SongMeta): SongPick {
@@ -107,6 +121,7 @@ export function SongPicker({
     const timer = setTimeout(() => {
       publicApi
         .search(slug, term)
+        .then((r) => (r.unavailable ? searchItunesHere(term) : r))
         .then((r) => {
           if (latest.current !== term) return;
           setResults(r.results);

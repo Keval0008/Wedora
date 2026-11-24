@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { dedupeResults, isAllowedThumbnail, type SearchResult } from "./search";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { dedupeResults, isAllowedThumbnail, searchSongs, type SearchResult } from "./search";
 
 const r = (title: string, artist: string, album = ""): SearchResult => ({
   source: "itunes",
@@ -27,6 +27,36 @@ describe("dedupeResults", () => {
 
   it("returns at most six", () => {
     expect(dedupeResults(Array.from({ length: 12 }, (_, i) => r(`Song ${i}`, "X")))).toHaveLength(6);
+  });
+});
+
+describe("searchSongs", () => {
+  beforeEach(() => {
+    // The minimum getEnv() needs; no Spotify keys, so search goes to iTunes.
+    vi.stubEnv("DATABASE_URL", "mysql://root@localhost:3306/test");
+    vi.stubEnv("BETTER_AUTH_SECRET", "x".repeat(32));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("reports the catalogue unavailable, not 'no match', when Apple refuses (as it does on Workers)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Rate limit has been exceeded", { status: 429 })));
+    await expect(searchSongs("tum hi ho")).resolves.toEqual({ results: [], source: null, unavailable: true });
+  });
+
+  it("returns iTunes results when Apple answers", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ results: [{ trackName: "Kesariya", artistName: "Arijit Singh" }] })));
+    const out = await searchSongs("kesariya");
+    expect(out.source).toBe("itunes");
+    expect(out.results.map((x) => x.title)).toEqual(["Kesariya"]);
+    expect(out.unavailable).toBeUndefined();
+  });
+
+  it("treats an empty answer as no match, not unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ results: [] })));
+    await expect(searchSongs("zzqx nothing")).resolves.toEqual({ results: [], source: null });
   });
 });
 
