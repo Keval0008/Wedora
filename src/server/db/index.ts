@@ -4,10 +4,11 @@ import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { getEnv } from "../env";
 import * as schema from "./schema";
+import { allowMysqlTlsOnWorkers } from "./workers-tls";
 
 export type DB = MySql2Database<typeof schema>;
 
-let instance: { pool: mysql.Pool; db: DB } | null = null;
+type Instance = { pool: mysql.Pool; db: DB };
 
 /** TiDB Cloud only accepts TLS; a local MySQL usually has none. */
 function wantsTls(url: string, flag?: "true" | "false"): boolean {
@@ -15,17 +16,33 @@ function wantsTls(url: string, flag?: "true" | "false"): boolean {
   return /tidbcloud\.com/i.test(url);
 }
 
-function connect() {
+/**
+ * On Cloudflare Workers the OpenNext worker stores `{ env, ctx, cf }` here for
+ * the request being handled. It is undefined on Vercel and in `next dev`.
+ */
+const CLOUDFLARE_CONTEXT = Symbol.for("__cloudflare-context__");
+
+/** The current Cloudflare request's ExecutionContext, or undefined elsewhere. */
+function cloudflareRequest(): object | undefined {
+  const context = (globalThis as Record<symbol, { ctx?: object } | undefined>)[CLOUDFLARE_CONTEXT];
+  return context?.ctx ?? undefined;
+}
+
+function connect(onWorkers: boolean): Instance {
   const env = getEnv();
+  if (onWorkers) allowMysqlTlsOnWorkers();
   const pool = mysql.createPool({
     uri: env.DATABASE_URL,
-    // Serverless instances are many and short-lived; a few connections each is plenty.
-    connectionLimit: 5,
+    // Workers allow 6 open connections per request (fetches included), and a
+    // pool there lives for one request, so keep it small.
+    connectionLimit: onWorkers ? 2 : 5,
     maxIdle: 2,
     idleTimeout: 30_000,
     timezone: "Z",
     dateStrings: false,
-    enableKeepAlive: true,
+    enableKeepAlive: !onWorkers,
+    // Workers forbid eval / new Function, which mysql2 uses to build row parsers.
+    disableEval: onWorkers,
     ssl: wantsTls(env.DATABASE_URL, env.DATABASE_SSL)
       ? { minVersion: "TLSv1.2", rejectUnauthorized: true }
       : undefined,
@@ -40,23 +57,45 @@ function connect() {
 
   // Keeps the Vercel instance alive just long enough to close idle connections cleanly.
   // It recognises mysql2's core pool, which the promise wrapper keeps in `.pool`.
-  try {
-    attachDatabasePool(pool.pool);
-  } catch (error) {
-    console.warn("[db] attachDatabasePool skipped:", (error as Error).message);
+  if (!onWorkers) {
+    try {
+      attachDatabasePool(pool.pool);
+    } catch (error) {
+      console.warn("[db] attachDatabasePool skipped:", (error as Error).message);
+    }
   }
 
   return { pool, db: drizzle(pool, { schema, mode: "default" }) };
 }
 
+/** Node (Vercel, `next start`, `next dev`): one pool shared by every request. */
+let shared: Instance | null = null;
+
+/**
+ * Cloudflare Workers: a socket opened while handling one request cannot be
+ * used by another ("Cannot perform I/O on behalf of a different request"),
+ * so each request gets its own pool. Workers close its sockets when the
+ * request ends, and the WeakMap entry goes with the request's context.
+ */
+const perRequest = new WeakMap<object, Instance>();
+
 export function getDb(): DB {
-  instance ??= connect();
-  return instance.db;
+  const request = cloudflareRequest();
+  if (request) {
+    let instance = perRequest.get(request);
+    if (!instance) {
+      instance = connect(true);
+      perRequest.set(request, instance);
+    }
+    return instance.db;
+  }
+  shared ??= connect(false);
+  return shared.db;
 }
 
 /**
- * The Drizzle database, connected on first use. Methods are bound to the real
- * instance so query builders keep their `this`.
+ * The Drizzle database for the current request, connected on first use.
+ * Methods are bound to the real instance so query builders keep their `this`.
  */
 export const db: DB = new Proxy({} as DB, {
   get(_target, prop) {

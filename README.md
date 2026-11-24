@@ -86,6 +86,17 @@ gh repo create wedora --private --source . --push
 3. Deploy. Production builds run the migrations before `next build`, so the tables are created on the first deploy.
 4. If you add a custom domain later, set `BETTER_AUTH_URL` to it.
 
+### 3b. Or: Cloudflare Workers
+The repo also deploys to Workers through OpenNext (`wrangler.jsonc`, `open-next.config.ts`).
+1. **Workers & Pages → Create → Import a repository**, pick the repo, and set:
+   - Build command: `pnpm run cloudflare-build`
+   - Deploy command: `pnpm exec opennextjs-cloudflare deploy`
+2. Under the Worker's **Settings → Variables and Secrets**, add the same variables as for Vercel, as **Secrets**, plus `BETTER_AUTH_URL` set to the Worker's address (for example `https://wedora.<you>.workers.dev`). It is required here, because only Vercel tells the app its own URL.
+3. Migrations: add `DATABASE_URL` under **Settings → Build → Variables and secrets** too, and builds of `main` apply them, as on Vercel. Without it, run `pnpm db:migrate` yourself after a schema change.
+4. Point cron-job.org (below) and the Telegram webhook at the Worker's address.
+
+Sign-in hashes the passcode, which takes more CPU than the Workers Free plan's 10 ms per request. If sign-in fails with error 1102, the Worker needs the Workers Paid plan.
+
 ### 4. Reminders every minute: cron-job.org
 Vercel Hobby crons run only once a day. `vercel.json` keeps one at 08:00 IST as a backstop. The every-minute tick comes from cron-job.org, which is free:
 1. Create a job for `https://<your-app>.vercel.app/api/cron/tick`, running **every 1 minute**.

@@ -51,9 +51,21 @@ export function getEnv(): Env {
     Object.entries(process.env).filter(([, v]) => v !== undefined && v !== ""),
   );
   const parsed = EnvSchema.safeParse(raw);
-  if (!parsed.success) {
-    const lines = parsed.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`);
-    throw new Error(`Invalid environment variables:\n${lines.join("\n")}\nSee .env.example.`);
+  const problems = parsed.success ? [] : parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+  // Vercel supplies the production domain; every other host must be told its URL,
+  // or sign-in cookies and origin checks would point at localhost.
+  if (
+    parsed.success &&
+    parsed.data.NODE_ENV === "production" &&
+    !parsed.data.BETTER_AUTH_URL &&
+    !parsed.data.VERCEL_PROJECT_PRODUCTION_URL &&
+    !parsed.data.VERCEL_URL
+  ) {
+    problems.push("BETTER_AUTH_URL: required outside Vercel, e.g. https://wedora.example.workers.dev");
+  }
+  if (problems.length > 0 || !parsed.success) {
+    // One line, so log viewers (Vercel, Cloudflare) show the whole message.
+    throw new Error(`Invalid environment variables — ${problems.join("; ")}. See .env.example.`);
   }
   cached = parsed.data;
   return cached;

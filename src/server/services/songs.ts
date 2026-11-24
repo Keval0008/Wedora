@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
-import { waitUntil } from "@vercel/functions";
 import { and, count, eq, gte, isNull, sql } from "drizzle-orm";
+import { after } from "next/server";
 import { z } from "zod";
 import { db, isDuplicateKey } from "../db";
 import { song, songList, songSubmission, type Song, type SongList } from "../db/schema";
@@ -217,7 +217,8 @@ export async function submitOne(
   });
   existing.push({ id, normKey, spotifyId: incoming.spotifyId, youtubeId: incoming.youtubeId, title, performer: entry.performer ?? null, thumbnailUrl });
   // Find it on YouTube for the DJ after replying, so the guest doesn't wait.
-  if (!incoming.youtubeId && youtubeConfigured()) waitUntil(attachYoutube(id, title, artist, !thumbnailUrl));
+  // Next's after() keeps the function alive for it on both Vercel and Cloudflare.
+  if (!incoming.youtubeId && youtubeConfigured()) after(attachYoutube(id, title, artist, !thumbnailUrl));
   return { input, status: "added", ...shown, message: "Added ✓" };
 }
 

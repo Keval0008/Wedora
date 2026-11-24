@@ -2,7 +2,7 @@ import "server-only";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization, username } from "better-auth/plugins";
-import { getDb } from "../db";
+import { db } from "../db";
 import * as schema from "../db/schema";
 import { appUrl, getEnv, isProd } from "../env";
 import { passcode } from "./passcode-plugin";
@@ -21,7 +21,9 @@ function createAuth() {
     appName: "Wedora",
     baseURL: base,
     secret: env.BETTER_AUTH_SECRET,
-    database: drizzleAdapter(getDb(), { provider: "mysql", schema }),
+    // The `db` proxy resolves to the current request's connection on every call,
+    // which Cloudflare Workers require; this auth instance outlives the request.
+    database: drizzleAdapter(db, { provider: "mysql", schema }),
     trustedOrigins,
     // No email and no passwords: people sign up and in with a username and passcode.
     emailAndPassword: { enabled: false },

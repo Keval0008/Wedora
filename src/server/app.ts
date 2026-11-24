@@ -1,6 +1,5 @@
 import "server-only";
 import { HTTPException } from "hono/http-exception";
-import { getEnv } from "./env";
 import { router } from "./hono";
 import { getAuth } from "./lib/auth";
 import { HttpError } from "./lib/http";
@@ -42,7 +41,9 @@ app.notFound((c) => c.json({ error: "Not found" }, 404));
 app.onError((err, c) => {
   if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
-  console.error("[api] unhandled error:", err);
-  const prod = getEnv().NODE_ENV === "production";
+  // The message goes first on its own: some log viewers only show the stack.
+  console.error(`[api] unhandled error: ${err.name}: ${err.message}`, err);
+  // Read NODE_ENV directly: getEnv() throws when the error *is* a bad environment.
+  const prod = process.env.NODE_ENV === "production";
   return c.json({ error: prod ? "Something went wrong" : String(err) }, 500);
 });

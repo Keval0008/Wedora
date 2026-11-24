@@ -1,0 +1,32 @@
+/**
+ * Cloudflare Workers config, used by `pnpm run deploy` and by Workers Builds.
+ * The app itself is built for Workers by OpenNext (open-next.config.ts).
+ *
+ * Runtime variables and secrets (DATABASE_URL, BETTER_AUTH_SECRET, …) are set
+ * in the dashboard: Workers & Pages → wedora → Settings → Variables and Secrets.
+ * OpenNext copies them into process.env. They are not listed here, so nobody
+ * commits a secret, and keep_vars stops a deploy from deleting them.
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wedora",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-11-23",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      // OpenNext calls the Worker itself through this binding. Must match "name".
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "wedora"
+    }
+  ],
+  "keep_vars": true,
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true
+  }
+}
